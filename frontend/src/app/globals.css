@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 15, 23, 42;
+  --background-rgb: 248, 250, 252;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-rgb));
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* Chart container sizing */
+.chart-container {
+  @apply w-full;
+  min-height: 300px;
+}
+
+/* KPI card styles */
+.kpi-card {
+  @apply bg-white rounded-xl border border-slate-200 p-6 shadow-sm;
+}
+
+/* Disclaimer banner */
+.disclaimer-banner {
+  @apply text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2;
+}
+
+/* Table styles */
+.data-table {
+  @apply w-full text-sm;
+}
+
+.data-table th {
+  @apply text-left text-slate-500 font-medium pb-2 border-b border-slate-200;
+}
+
+.data-table td {
+  @apply py-2 border-b border-slate-100;
+}
+
+/* Loading skeleton */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  @apply rounded;
+}

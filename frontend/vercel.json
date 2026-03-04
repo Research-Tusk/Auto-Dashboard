@@ -1,0 +1,15 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "installCommand": "npm install",
+  "framework": "nextjs",
+  "regions": ["bom1"],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {"key": "Cache-Control", "value": "no-store"}
+      ]
+    }
+  ]
+}
