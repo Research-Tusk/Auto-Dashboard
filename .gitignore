@@ -1,0 +1,58 @@
+# ===========================================================================
+# AutoQuant — Root .gitignore
+# ===========================================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# --- Node.js ---
+node_modules/
+.next/
+out/
+
+# --- Environment files (secrets) ---
+.env
+.env.local
+.env.*.local
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-*
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Playwright ---
+playwright-report/
+
+# --- Logs ---
+*.log
+
+# --- Test / Coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+coverage/
+
+# --- Docker ---
+# Don't ignore Dockerfile, but ignore local volumes
+docker-data/
+
+# --- Backfill progress (ephemeral) ---
+**/autoquant_backfill_progress.json
