@@ -1,0 +1,26 @@
+# ETL-specific .gitignore
+
+.env
+.env.local
+
+# Backfill progress tracking
+autoquant_backfill_progress.json
+
+# Playwright browser binaries
+ms-playwright/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+coverage/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.eggs/
+dist/
+build/
+*.egg-info/
+.venv/

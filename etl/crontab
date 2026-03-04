@@ -1,0 +1,30 @@
+# ===========================================================================
+# AutoQuant ETL — Crontab
+# Install: crontab -e, paste contents
+# Assumes: ETL is installed, DATABASE_URL + TELEGRAM_* env vars set
+# ===========================================================================
+
+# Environment (Railway/Render inject these; for raw VM deployment)
+# DATABASE_URL=postgresql://...
+# TELEGRAM_BOT_TOKEN=...
+# TELEGRAM_CHAT_ID=...
+
+# ---------------------------------------------------------------------------
+# Daily: Extract VAHAN registrations (6 AM IST = 0:30 UTC)
+# ---------------------------------------------------------------------------
+30 0 * * * cd /app && python -m autoquant_etl extract-daily >> /var/log/autoquant/extract.log 2>&1
+
+# ---------------------------------------------------------------------------
+# Daily: Health check + Telegram digest (1 PM IST = 7:30 UTC)
+# ---------------------------------------------------------------------------
+30 7 * * * cd /app && python -m autoquant_etl monitor --digest >> /var/log/autoquant/monitor.log 2>&1
+
+# ---------------------------------------------------------------------------
+# Weekly: Backfill trailing 6 months to fill gaps (Sunday 2 AM IST = Sat 20:30 UTC)
+# ---------------------------------------------------------------------------
+30 20 * * 6 cd /app && python -m autoquant_etl backfill --from-month "$(date -d '-6 months' +%Y-%m)" --to-month "$(date +%Y-%m)" >> /var/log/autoquant/backfill.log 2>&1
+
+# ---------------------------------------------------------------------------
+# Monthly: VAHAN vs FADA reconciliation (5th of month, 10 AM IST = 4:30 UTC)
+# ---------------------------------------------------------------------------
+30 4 5 * * cd /app && python -m autoquant_etl reconcile --month "$(date -d 'last month' +%Y-%m)" >> /var/log/autoquant/reconcile.log 2>&1

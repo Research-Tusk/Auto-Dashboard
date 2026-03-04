@@ -1,0 +1,38 @@
+# ===========================================================================
+# AutoQuant ETL — Render Deployment Config
+# ===========================================================================
+services:
+  - type: worker
+    name: autoquant-etl
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: PLAYWRIGHT_HEADLESS
+        value: "true"
+      - key: LOG_LEVEL
+        value: "INFO"
+
+# Cron jobs (separate Render Cron services)
+cronJobs:
+  - name: autoquant-daily-extract
+    schedule: "30 0 * * *"  # 6 AM IST
+    command: python -m autoquant_etl extract-daily
+
+  - name: autoquant-monitor
+    schedule: "30 7 * * *"  # 1 PM IST
+    command: python -m autoquant_etl monitor --digest
+
+  - name: autoquant-backfill
+    schedule: "30 20 * * 6"  # Sunday 2 AM IST
+    command: python -m autoquant_etl backfill --from-month "$(date -d '-6 months' +%Y-%m)" --to-month "$(date +%Y-%m)"
+
+  - name: autoquant-reconcile
+    schedule: "30 4 5 * *"   # 5th of month, 10 AM IST
+    command: python -m autoquant_etl reconcile --month "$(date -d 'last month' +%Y-%m)"
