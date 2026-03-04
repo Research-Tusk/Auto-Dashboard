@@ -1,0 +1,102 @@
+name: ETL CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'etl/**'
+      - 'db/**'
+      - '.github/workflows/etl-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'etl/**'
+      - 'db/**'
+
+jobs:
+  lint-and-test:
+    name: Lint + Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: etl/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd etl
+          pip install -r requirements.txt
+
+      - name: Run ruff linter
+        run: |
+          cd etl
+          ruff check autoquant_etl/
+          ruff format --check autoquant_etl/
+
+      - name: Run tests
+        run: |
+          cd etl
+          python -m pytest tests/ -v --tb=short --ignore=tests/test_vahan_live.py
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/autoquant_test
+
+      - name: Run tests with coverage
+        run: |
+          cd etl
+          python -m pytest tests/ -v --cov=autoquant_etl --cov-report=xml --ignore=tests/test_vahan_live.py
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/autoquant_test
+
+  validate-sql:
+    name: Validate SQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: autoquant_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply schema
+        run: |
+          psql postgresql://postgres:postgres@localhost:5432/autoquant_test \
+            -f db/001_schema.sql
+        env:
+          PGPASSWORD: postgres
+
+      - name: Apply seeds
+        run: |
+          psql postgresql://postgres:postgres@localhost:5432/autoquant_test \
+            -f db/002_seed_dimensions_v2.sql
+          psql postgresql://postgres:postgres@localhost:5432/autoquant_test \
+            -f db/003_seed_asp.sql
+          psql postgresql://postgres:postgres@localhost:5432/autoquant_test \
+            -f db/004_monitoring_views.sql
+        env:
+          PGPASSWORD: postgres
+
+      - name: Verify table count
+        run: |
+          psql postgresql://postgres:postgres@localhost:5432/autoquant_test \
+            -c "SELECT COUNT(*) FROM dim_oem;"
+        env:
+          PGPASSWORD: postgres
