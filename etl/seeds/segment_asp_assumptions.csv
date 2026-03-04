@@ -1,0 +1,7 @@
+segment_code,dashboard_bucket,asp_ex_factory_rupees,effective_from,effective_to,confidence,notes
+PV,ICE,800000,2025-04-01,,MEDIUM,"Blended PV ICE ASP (petrol+diesel+CNG weighted). Approx: Maruti avg ~₹7L, Hyundai ~₹10L, Tata ~₹9L, M&M ~₹14L. Segment blended ~₹8L."
+PV,EV,1200000,2025-04-01,,LOW,"Weighted avg: Nexon EV ~₹14.5L, Tiago EV ~₹10L, XUV400 ~₹16L, Hyundai Ioniq 5 pulls up. ₹12L blended."
+CV,ICE,1500000,2025-04-01,,LOW,"Blended LCV+MHCV. LCV (Tata Ace/Bolero pickup) ~₹7-8L; MHCV (Tata/Ashok trucks) ~₹25-35L. Highly variable mix."
+CV,EV,10000000,2025-04-01,,LOW,"Electric buses (Switch/Olectra/Tata). ₹1Cr+ per unit. Very low volume, high ASP."
+2W,ICE,95000,2025-04-01,,MEDIUM,"Weighted motorcycle+scooter mix. Splendor ~₹75K, Activa ~₹85K, RE Classic ~₹2L. Blended ~₹95K."
+2W,EV,110000,2025-04-01,,MEDIUM,"Ola S1 ~₹1L, Ather 450X ~₹1.3L, TVS iQube ~₹1.1L, Bajaj Chetak ~₹1.15L. Blended ~₹1.1L."
