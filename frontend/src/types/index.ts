@@ -18,24 +18,60 @@ export interface TIVRow {
 
 export interface OEMShareRow {
   month_key: string;
+  fy_quarter: string;
+  segment_code: string;
   oem_name: string;
   nse_ticker: string | null;
-  segment_code: string;
-  oem_units: number;
-  segment_tiv: number;
-  market_share_pct: number | null;
+  units: number;
+  market_share_pct: number;
 }
 
-export interface OEMSummaryRow {
-  month_key: string;
-  fy_year: string;
-  fy_quarter: string;
+// ---------------------------------------------------------------------------
+// Dimension / metadata
+// ---------------------------------------------------------------------------
+
+export interface OEMRecord {
+  oem_id: number;
   oem_name: string;
-  segment_code: string;
-  fuel_bucket: 'ICE' | 'EV';
-  total_units: number;
-  units_prior_year: number | null;
-  last_updated: string | null;
+  nse_ticker: string | null;
+  primary_segments: string[];
+  is_in_scope: boolean;
+  description: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Fact tables (Supabase views)
+// ---------------------------------------------------------------------------
+
+export interface TIVRecord {
+  fy_quarter: string;
+  segment_id: number;
+  tiv_retail: number | null;
+  tiv_wholesale: number | null;
+  tiv_yoy_pct: number | null;
+}
+
+export interface OEMScorecard {
+  fy_quarter: string;
+  oem_id: number;
+  segment_id: number;
+  units_retail_qtd: number | null;
+  units_wholesale_qtd: number | null;
+  revenue_retail_cr: number | null;
+  ms_pct: number | null;
+  ms_pct_qoq: number | null;
+  ms_pct_yoy: number | null;
+  rank_by_ms: number | null;
+}
+
+export interface MSHistoryRecord {
+  fy_quarter: string;
+  oem_id: number;
+  segment_id: number;
+  units_retail: number | null;
+  ms_pct: number | null;
+  ms_pct_qoq: number | null;
+  ms_pct_yoy: number | null;
 }
 
 export interface RevenueRow {
@@ -48,79 +84,43 @@ export interface RevenueRow {
   revenue_retail_cr: number | null;
   revenue_wholesale_cr: number | null;
   data_completeness: number | null;
-  generated_at: string;
+  generated_at: string | null;
 }
 
-export interface OEMInfo {
+export interface PowertrainRow {
+  fy_quarter: string;
   oem_id: number;
-  oem_name: string;
-  nse_ticker: string | null;
-  is_listed: boolean;
-  is_in_scope: boolean;
-  primary_segments: string[];
-}
-
-export interface FreshnesRow {
-  source: string;
-  last_attempted: string | null;
-  last_success: string | null;
-  last_records_loaded: number | null;
-  failures_24h: number;
+  segment_id: number;
+  powertrain: string;
+  units_retail: number | null;
+  share_pct: number | null;
 }
 
 // ---------------------------------------------------------------------------
-// Chart data types
+// Chart-specific types
 // ---------------------------------------------------------------------------
+
+export type SegmentCode = 'PV' | 'CV' | '2W';
 
 export interface TIVChartPoint {
-  month: string;              // formatted for display: 'Dec 25'
-  total: number;
-  ev: number;
-  evPct: number;
+  quarter: string;
+  tiv: number;
+  yoy_pct: number | null;
 }
 
-export interface OEMShareChartPoint {
-  month: string;
-  [oemName: string]: string | number;  // dynamic OEM keys
+export interface MSChartPoint {
+  quarter: string;
+  [oemName: string]: number | string;
 }
 
 export interface RevenueChartPoint {
-  quarter: string;
+  quarter: string;         // used as X-axis label (may be OEM name for bar chart)
   revenue_cr: number;
   units: number;
   asp: number;
 }
 
-// ---------------------------------------------------------------------------
-// API response types
-// ---------------------------------------------------------------------------
-
-export interface DashboardAPIResponse {
-  tiv: TIVRow[];
-  share: OEMShareRow[];
-}
-
-export interface OEMAPIResponse {
-  monthly: OEMSummaryRow[];
-  revenue: RevenueRow[];
-  share: OEMShareRow[];
-}
-
-export interface RevenueAPIResponse {
-  data: RevenueRow[];
-}
-
-// ---------------------------------------------------------------------------
-// UI state types
-// ---------------------------------------------------------------------------
-
-export type SegmentCode = 'PV' | 'CV' | '2W';
-export type FuelBucket = 'ICE' | 'EV';
-export type FYQuarter = string; // e.g. 'Q3FY26'
-
-export interface FilterState {
-  segment: SegmentCode;
-  fromYear: number;
-  toYear: number;
-  oemTicker?: string;
+export interface PowertrainChartPoint {
+  quarter: string;
+  [powertrain: string]: number | string;
 }
