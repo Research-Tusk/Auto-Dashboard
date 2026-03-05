@@ -6,23 +6,20 @@
 -- These will be calibrated from earnings data as it becomes available
 -- ============================================================================
 
--- Note: fuel_id = 0 means 'all fuels combined' for segment-level ASP
--- This is used when fuel-specific pricing is not tracked
-
 WITH oem_seg AS (
     SELECT o.oem_id, o.oem_name, s.segment_id, s.segment_code
     FROM dim_oem o
     CROSS JOIN dim_segment s
     WHERE s.sub_segment IS NULL  -- top-level segments only
 )
-INSERT INTO fact_asp_master (oem_id, segment_id, fuel_id, effective_from, asp_inr_lakhs, source, notes)
+INSERT INTO fact_asp_master (oem_id, segment_id, fuel_id, effective_from, asp_inr_lakhs, asp_source, notes)
 SELECT
     os.oem_id,
     os.segment_id,
     0 AS fuel_id,
     '2024-04-01'::DATE AS effective_from,
     asp.asp_val::DECIMAL(10,4),
-    'ANALYST_ESTIMATE' AS source,
+    'ANALYST_ESTIMATE' AS asp_source,
     asp.notes
 FROM (
     VALUES
