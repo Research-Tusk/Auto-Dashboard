@@ -1,59 +1,58 @@
 """
-AutoQuant ETL — Gold Layer: Revenue Proxy Computation
-======================================================
-Computes estimated quarterly revenue from:
-  registration_volume × ASP_assumption = implied_revenue_proxy
+AutoQuant ETL — Gold Layer: Revenue Estimation
+================================================
+Computes quarterly demand-based revenue proxy:
 
-PROMINENT DISCLAIMER (reproduced on all output):
-  These are DEMAND-BASED PROXIES, not accounting revenue.
-  Retail registrations × analyst ASP assumption ≠ reported earnings.
-  Do NOT use for investment decisions without official OEM results.
+  revenue_retail_cr = units_retail × asp_inr_lakhs / 100
 
-Data flow:
-  fact_monthly_registrations (Silver)
-  + fact_asp_master (Gold)
-  → est_quarterly_revenue (Gold)
+Where:
+  units_retail    = sum of registrations in fact_monthly_registrations
+                    for the quarter date range
+  asp_inr_lakhs   = current active ASP from fact_asp_master
+  / 100           = converts Lakhs to Crores
+
+Results are upserted into est_quarterly_revenue.
+
+Data completeness is computed as:
+  (OEMs with both registration data AND ASP) / (total OEMs with data)
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
 from typing import List, Optional
 
 import asyncpg
 import structlog
 
 from autoquant_etl.config import Settings
+from autoquant_etl.utils.fy_calendar import (
+    fy_quarter_date_range,
+    current_fy_quarter,
+    date_to_fy_quarter,
+)
 
 logger = structlog.get_logger(__name__)
 
-DISCLAIMER = (
-    "DISCLAIMER: Revenue figures are demand-based proxies "
-    "(registrations × ASP assumption). NOT accounting revenue. "
-    "Do NOT use for investment decisions without official OEM results."
-)
-
 
 @dataclass
-class RevenueRow:
-    fy_quarter: str
-    oem_id: int
+class RevenueEstRow:
+    """A single OEM × segment revenue estimate row."""
     oem_name: str
-    segment_id: int
     segment_code: str
     units_retail: int
-    asp_used: float
-    revenue_retail_cr: float
-    data_completeness: float
+    asp_used: float           # INR Lakhs
+    revenue_retail_cr: float  # INR Crores
 
 
 @dataclass
-class RevenueEstimationResult:
+class RevenueResult:
+    """Result of a quarterly revenue estimation run."""
     quarter: str
     oem_count: int
-    rows: List[RevenueRow] = field(default_factory=list)
-    disclaimer: str = DISCLAIMER
+    rows: List[RevenueEstRow] = field(default_factory=list)
+    data_completeness: float = 0.0
+    dry_run: bool = False
 
 
 async def run_revenue_estimation(
@@ -62,149 +61,159 @@ async def run_revenue_estimation(
     quarter: Optional[str] = None,
     dry_run: bool = False,
     verbose: bool = False,
-) -> RevenueEstimationResult:
+) -> RevenueResult:
     """
-    Compute quarterly revenue proxy for all in-scope OEMs.
+    Compute quarterly demand-based revenue proxy and upsert into est_quarterly_revenue.
 
     Args:
         pool: asyncpg connection pool
         settings: application settings
-        quarter: FY quarter e.g. 'Q3FY26'. Defaults to current quarter.
-        dry_run: if True, compute but don't write to est_quarterly_revenue
+        quarter: FY quarter string e.g. "Q3FY26". Defaults to current quarter.
+        dry_run: if True, compute but skip DB writes
         verbose: enable verbose logging
 
     Returns:
-        RevenueEstimationResult with per-OEM revenue rows
+        RevenueResult with computed rows and metadata
     """
-    log = logger.bind(quarter=quarter, dry_run=dry_run)
+    from datetime import date as date_type
+
+    # Resolve quarter
+    if not quarter:
+        quarter = current_fy_quarter()
+
+    start_date, end_date = fy_quarter_date_range(quarter)
+
+    log = logger.bind(quarter=quarter, start=start_date.isoformat(), end=end_date.isoformat())
     log.info("gold.revenue_estimation_start")
 
     async with pool.acquire() as conn:
-        # Resolve quarter
-        if not quarter:
-            row = await conn.fetchrow(
-                "SELECT fy_quarter FROM dim_date WHERE date_key = CURRENT_DATE"
-            )
-            quarter = row["fy_quarter"] if row else None
-            if not quarter:
-                raise ValueError("Cannot determine current FY quarter from dim_date")
-
-        log = log.bind(quarter=quarter)
-
-        # Get all months in the quarter
-        month_rows = await conn.fetch(
-            "SELECT DISTINCT date_key FROM dim_date WHERE fy_quarter = $1 "
-            "AND calendar_month = EXTRACT(MONTH FROM date_key) "
-            "ORDER BY date_key",
-            quarter,
-        )
-        quarter_months = [r["date_key"] for r in month_rows]
-
-        if not quarter_months:
-            raise ValueError(f"No months found in dim_date for quarter {quarter}")
-
-        # Compute data completeness
-        # (number of months with data / expected months in quarter)
-        expected_months = 3
-        months_with_data = await conn.fetchval(
-            """
-            SELECT COUNT(DISTINCT month_key)
-            FROM fact_monthly_registrations
-            WHERE month_key = ANY($1)
-            """,
-            quarter_months,
-        )
-        completeness = float(months_with_data or 0) / expected_months
-        log.info("gold.quarter_months", months_with_data=months_with_data, completeness=completeness)
-
-        # Get quarterly units by OEM + segment
-        rows = await conn.fetch(
+        # Query registration units aggregated by OEM × segment for the quarter
+        reg_rows = await conn.fetch(
             """
             SELECT
-                do2.oem_id,
-                do2.oem_name,
-                ds.segment_id,
-                ds.segment_code,
-                SUM(fmr.units) AS units_retail
-            FROM fact_monthly_registrations fmr
-            JOIN dim_oem do2 ON do2.oem_id = fmr.oem_id
-            JOIN dim_segment ds ON ds.segment_id = fmr.segment_id AND ds.sub_segment IS NULL
-            WHERE fmr.month_key = ANY($1)
-              AND do2.is_in_scope = TRUE
-            GROUP BY do2.oem_id, do2.oem_name, ds.segment_id, ds.segment_code
-            ORDER BY ds.segment_code, do2.oem_name
+                o.oem_id,
+                o.oem_name,
+                s.segment_id,
+                s.segment_code,
+                SUM(mr.units) AS units_retail
+            FROM fact_monthly_registrations mr
+            JOIN dim_oem       o ON o.oem_id      = mr.oem_id
+            JOIN dim_segment   s ON s.segment_id  = mr.segment_id
+            WHERE mr.month_key >= $1
+              AND mr.month_key <= $2
+            GROUP BY o.oem_id, o.oem_name, s.segment_id, s.segment_code
+            HAVING SUM(mr.units) > 0
+            ORDER BY o.oem_name, s.segment_code
             """,
-            quarter_months,
+            start_date,
+            end_date,
         )
 
-        result_rows: List[RevenueRow] = []
+        if not reg_rows:
+            log.warning("gold.no_registration_data")
+            return RevenueResult(quarter=quarter, oem_count=0, dry_run=dry_run)
 
-        for row in rows:
-            # Get ASP assumption for this OEM + segment
-            asp_row = await conn.fetchrow(
-                """
-                SELECT asp_inr_lakhs
-                FROM fact_asp_master
-                WHERE oem_id = $1
-                  AND segment_id = $2
-                  AND fuel_id = 0
-                  AND effective_from <= CURRENT_DATE
-                  AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
-                ORDER BY effective_from DESC
-                LIMIT 1
-                """,
-                row["oem_id"], row["segment_id"],
-            )
+        # Query active ASPs for each OEM × segment combination
+        # Using a lateral join approach: get the most recent active ASP
+        asp_rows = await conn.fetch(
+            """
+            SELECT
+                a.oem_id,
+                a.segment_id,
+                a.asp_inr_lakhs
+            FROM fact_asp_master a
+            WHERE a.effective_to IS NULL
+               OR a.effective_to >= $1
+            """,
+            start_date,
+        )
 
-            if not asp_row:
-                log.warning("gold.no_asp", oem=row["oem_name"], segment=row["segment_code"])
-                continue
+        # Build ASP lookup: (oem_id, segment_id) → asp_inr_lakhs
+        asp_map = {
+            (row["oem_id"], row["segment_id"]): float(row["asp_inr_lakhs"])
+            for row in asp_rows
+        }
 
-            asp_lakhs = float(asp_row["asp_inr_lakhs"])
-            units = int(row["units_retail"] or 0)
+    revenue_rows: List[RevenueEstRow] = []
+    oem_ids_with_data = set()
+    oem_ids_with_asp = set()
 
-            # Revenue in Crore = (units * ASP_lakhs) / 100
-            # (1 Crore = 100 Lakhs)
-            revenue_cr = round((units * asp_lakhs) / 100, 2)
+    rows_to_insert = []
 
-            result_rows.append(RevenueRow(
-                fy_quarter=quarter,
-                oem_id=row["oem_id"],
-                oem_name=row["oem_name"],
-                segment_id=row["segment_id"],
-                segment_code=row["segment_code"],
+    for reg in reg_rows:
+        oem_id = reg["oem_id"]
+        segment_id = reg["segment_id"]
+        units = int(reg["units_retail"])
+        oem_ids_with_data.add(oem_id)
+
+        asp = asp_map.get((oem_id, segment_id))
+        if asp is None:
+            if verbose:
+                log.debug(
+                    "gold.no_asp",
+                    oem_name=reg["oem_name"],
+                    segment_code=reg["segment_code"],
+                )
+            continue
+
+        oem_ids_with_asp.add(oem_id)
+        revenue_cr = round(units * asp / 100, 2)
+
+        revenue_rows.append(
+            RevenueEstRow(
+                oem_name=reg["oem_name"],
+                segment_code=reg["segment_code"],
                 units_retail=units,
-                asp_used=asp_lakhs,
+                asp_used=asp,
                 revenue_retail_cr=revenue_cr,
-                data_completeness=completeness,
-            ))
-
-        if not dry_run and result_rows:
-            # Upsert into est_quarterly_revenue
-            async with pool.acquire() as write_conn:
-                async with write_conn.transaction():
-                    for rr in result_rows:
-                        await write_conn.execute(
-                            """
-                            INSERT INTO est_quarterly_revenue
-                                (fy_quarter, oem_id, segment_id, units_retail,
-                                 asp_used, revenue_retail_cr, data_completeness)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7)
-                            ON CONFLICT (fy_quarter, oem_id, segment_id) DO UPDATE SET
-                                units_retail       = EXCLUDED.units_retail,
-                                asp_used           = EXCLUDED.asp_used,
-                                revenue_retail_cr  = EXCLUDED.revenue_retail_cr,
-                                data_completeness  = EXCLUDED.data_completeness,
-                                generated_at       = NOW()
-                            """,
-                            rr.fy_quarter, rr.oem_id, rr.segment_id, rr.units_retail,
-                            rr.asp_used, rr.revenue_retail_cr, rr.data_completeness,
-                        )
-            log.info("gold.upserted", count=len(result_rows))
-
-        log.info("gold.revenue_estimation_done", oem_count=len(result_rows))
-        return RevenueEstimationResult(
-            quarter=quarter,
-            oem_count=len(result_rows),
-            rows=result_rows,
+            )
         )
+        rows_to_insert.append(
+            (quarter, oem_id, segment_id, units, asp, revenue_cr)
+        )
+
+    # Data completeness
+    completeness = (
+        len(oem_ids_with_asp) / len(oem_ids_with_data)
+        if oem_ids_with_data
+        else 0.0
+    )
+
+    log.info(
+        "gold.revenue_computed",
+        rows=len(revenue_rows),
+        oem_count=len(oem_ids_with_asp),
+        completeness=round(completeness, 3),
+        dry_run=dry_run,
+    )
+
+    if not dry_run and rows_to_insert:
+        async with pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO est_quarterly_revenue
+                    (fy_quarter, oem_id, segment_id, units_retail, asp_used,
+                     revenue_retail_cr, data_completeness, generated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                ON CONFLICT (fy_quarter, oem_id, segment_id)
+                DO UPDATE SET
+                    units_retail       = EXCLUDED.units_retail,
+                    asp_used           = EXCLUDED.asp_used,
+                    revenue_retail_cr  = EXCLUDED.revenue_retail_cr,
+                    data_completeness  = EXCLUDED.data_completeness,
+                    generated_at       = NOW()
+                """,
+                [
+                    (fy_q, oem_id, seg_id, units, asp, rev_cr, round(completeness, 4))
+                    for fy_q, oem_id, seg_id, units, asp, rev_cr in rows_to_insert
+                ],
+            )
+        log.info("gold.revenue_upserted", count=len(rows_to_insert))
+
+    return RevenueResult(
+        quarter=quarter,
+        oem_count=len(oem_ids_with_asp),
+        rows=revenue_rows,
+        data_completeness=completeness,
+        dry_run=dry_run,
+    )

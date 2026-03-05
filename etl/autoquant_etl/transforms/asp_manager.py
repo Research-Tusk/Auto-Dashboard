@@ -1,20 +1,26 @@
 """
-AutoQuant ETL — ASP Manager
-=============================
-CRUD operations for Average Selling Price (ASP) assumptions
-stored in fact_asp_master.
+AutoQuant ETL — ASP (Average Selling Price) Manager
+=====================================================
+Manages the fact_asp_master table which stores time-versioned ASP
+assumptions used for revenue proxy calculations.
 
-PROMINENT DISCLAIMER (must appear on ALL financial output):
-  Revenue figures are DEMAND-BASED PROXIES:
-  retail_registrations × analyst_ASP_assumption ≠ reported accounting revenue.
-  For investment decisions, always use the OEM's official quarterly results.
+ASP records are SCD (Slowly Changing Dimension) Type 2:
+- Each row has an effective_from / effective_to date range
+- The current active row has effective_to = NULL
+- Updating: close the old row (set effective_to = new effective_from - 1 day)
+            then insert the new row
+
+Source codes (by convention):
+  EARNINGS_DISCLOSURE — from quarterly earnings calls / investor presentations
+  INDUSTRY_ESTIMATE   — analyst / industry estimate
+  MANUAL              — manually entered
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
-from typing import List, Optional
+from datetime import date, timedelta
+from typing import Optional
 
 import asyncpg
 import structlog
@@ -23,87 +29,14 @@ logger = structlog.get_logger(__name__)
 
 
 @dataclass
-class ASPRecord:
-    asp_id: int
-    oem_name: str
-    segment_code: str
-    fuel_id: int
-    effective_from: date
-    effective_to: Optional[date]
-    asp_inr_lakhs: float
-    source: str
-    notes: Optional[str]
-
-
-@dataclass
 class ASPUpdateResult:
-    old_asp: float
-    new_asp: float
-    oem_name: str
-    segment_code: str
+    """Result of an ASP update operation."""
+    old_asp: float      # Previous ASP in INR Lakhs (0.0 if no prior row)
+    new_asp: float      # New ASP in INR Lakhs
+    oem_id: int
+    segment_id: int
     effective_from: date
-
-
-async def get_current_asp(
-    pool: asyncpg.Pool,
-    oem_name: str,
-    segment_code: str,
-    fuel_id: int = 0,
-    as_of: Optional[date] = None,
-) -> Optional[ASPRecord]:
-    """
-    Get the current (most recent effective) ASP for an OEM + segment.
-
-    Args:
-        pool: asyncpg connection pool
-        oem_name: canonical OEM name from dim_oem
-        segment_code: 'PV', 'CV', or '2W'
-        fuel_id: fuel dimension ID (0 = all fuels)
-        as_of: date for which ASP is needed (defaults to today)
-
-    Returns:
-        ASPRecord or None if not found
-    """
-    as_of = as_of or date.today()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT
-                fam.asp_id,
-                do2.oem_name,
-                ds.segment_code,
-                fam.fuel_id,
-                fam.effective_from,
-                fam.effective_to,
-                fam.asp_inr_lakhs,
-                fam.source,
-                fam.notes
-            FROM fact_asp_master fam
-            JOIN dim_oem do2 ON do2.oem_id = fam.oem_id
-            JOIN dim_segment ds ON ds.segment_id = fam.segment_id AND ds.sub_segment IS NULL
-            WHERE do2.oem_name = $1
-              AND ds.segment_code = $2
-              AND fam.fuel_id = $3
-              AND fam.effective_from <= $4
-              AND (fam.effective_to IS NULL OR fam.effective_to >= $4)
-            ORDER BY fam.effective_from DESC
-            LIMIT 1
-            """,
-            oem_name, segment_code, fuel_id, as_of,
-        )
-    if not row:
-        return None
-    return ASPRecord(
-        asp_id=row["asp_id"],
-        oem_name=row["oem_name"],
-        segment_code=row["segment_code"],
-        fuel_id=row["fuel_id"],
-        effective_from=row["effective_from"],
-        effective_to=row["effective_to"],
-        asp_inr_lakhs=float(row["asp_inr_lakhs"]),
-        source=row["source"],
-        notes=row["notes"],
-    )
+    dry_run: bool = False
 
 
 async def update_asp(
@@ -111,150 +44,138 @@ async def update_asp(
     oem_name: str,
     segment_code: str,
     asp_inr_lakhs: float,
-    effective_from: Optional[date] = None,
-    fuel_id: int = 0,
-    source: str = "ANALYST_ESTIMATE",
+    effective_from: date,
+    source: str = "EARNINGS_DISCLOSURE",
     notes: str = "",
     dry_run: bool = False,
 ) -> ASPUpdateResult:
     """
-    Insert a new ASP record and close out the previous one.
+    Update the ASP assumption for an OEM × segment combination.
 
-    This implements SCD Type 2 behaviour:
-      1. Set effective_to = effective_from - 1 day on current record
-      2. Insert new record with new asp_inr_lakhs and effective_from
+    Implements SCD Type 2 logic:
+    1. Look up oem_id from dim_oem (by oem_name)
+    2. Look up segment_id from dim_segment (by segment_code)
+    3. Close the currently active ASP row (set effective_to = effective_from - 1)
+    4. Insert a new row with the new ASP value
 
     Args:
         pool: asyncpg connection pool
-        oem_name: canonical OEM name
-        segment_code: 'PV', 'CV', or '2W'
-        asp_inr_lakhs: new ASP value in INR Lakhs
-        effective_from: date from which new ASP applies (default: today)
-        fuel_id: fuel dimension ID (0 = all fuels)
-        source: source of the ASP update
-        notes: optional notes
-        dry_run: if True, validate only, don't write
+        oem_name: OEM name as stored in dim_oem.oem_name
+        segment_code: segment code (PV / CV / 2W)
+        asp_inr_lakhs: new ASP in INR Lakhs
+        effective_from: date from which the new ASP is effective
+        source: source of the ASP data (default: EARNINGS_DISCLOSURE)
+        notes: optional free-text notes
+        dry_run: if True, skip DB writes and return the would-be result
 
     Returns:
         ASPUpdateResult with old and new ASP values
+
+    Raises:
+        ValueError: if OEM or segment is not found in dimension tables
     """
-    effective_from = effective_from or date.today()
-    log = logger.bind(oem=oem_name, segment=segment_code, asp=asp_inr_lakhs)
+    async with pool.acquire() as conn:
+        # Resolve oem_id
+        oem_id: Optional[int] = await conn.fetchval(
+            "SELECT oem_id FROM dim_oem WHERE LOWER(oem_name) = LOWER($1) LIMIT 1",
+            oem_name,
+        )
+        if oem_id is None:
+            raise ValueError(
+                f"OEM '{oem_name}' not found in dim_oem. "
+                "Check oem_name spelling (exact match, case-insensitive)."
+            )
 
-    # Get current ASP
-    current = await get_current_asp(pool, oem_name, segment_code, fuel_id, as_of=effective_from)
-    old_asp = current.asp_inr_lakhs if current else 0.0
+        # Resolve segment_id
+        segment_id: Optional[int] = await conn.fetchval(
+            "SELECT segment_id FROM dim_segment WHERE UPPER(segment_code) = UPPER($1) LIMIT 1",
+            segment_code,
+        )
+        if segment_id is None:
+            raise ValueError(
+                f"Segment '{segment_code}' not found in dim_segment. "
+                "Valid codes: PV, CV, 2W"
+            )
 
-    if dry_run:
-        log.info("asp_manager.dry_run", old_asp=old_asp, new_asp=asp_inr_lakhs)
-        return ASPUpdateResult(
-            old_asp=old_asp,
-            new_asp=asp_inr_lakhs,
-            oem_name=oem_name,
-            segment_code=segment_code,
-            effective_from=effective_from,
+        # Fetch the currently active ASP row
+        current_row = await conn.fetchrow(
+            """
+            SELECT asp_id, asp_inr_lakhs
+            FROM fact_asp_master
+            WHERE oem_id = $1
+              AND segment_id = $2
+              AND effective_to IS NULL
+            ORDER BY effective_from DESC
+            LIMIT 1
+            """,
+            oem_id,
+            segment_id,
         )
 
-    async with pool.acquire() as conn:
+        old_asp = float(current_row["asp_inr_lakhs"]) if current_row else 0.0
+        close_date = effective_from - timedelta(days=1)
+
+        logger.info(
+            "asp_manager.update",
+            oem_name=oem_name,
+            segment_code=segment_code,
+            old_asp=old_asp,
+            new_asp=asp_inr_lakhs,
+            effective_from=effective_from.isoformat(),
+            dry_run=dry_run,
+        )
+
+        if dry_run:
+            return ASPUpdateResult(
+                old_asp=old_asp,
+                new_asp=asp_inr_lakhs,
+                oem_id=oem_id,
+                segment_id=segment_id,
+                effective_from=effective_from,
+                dry_run=True,
+            )
+
         async with conn.transaction():
-            # Resolve OEM and segment IDs
-            oem_id = await conn.fetchval(
-                "SELECT oem_id FROM dim_oem WHERE oem_name = $1", oem_name
-            )
-            if not oem_id:
-                raise ValueError(f"OEM not found: {oem_name}")
-
-            segment_id = await conn.fetchval(
-                "SELECT segment_id FROM dim_segment WHERE segment_code = $1 AND sub_segment IS NULL",
-                segment_code,
-            )
-            if not segment_id:
-                raise ValueError(f"Segment not found: {segment_code}")
-
-            # Close out current record if exists
-            if current:
+            # Close the current active row if one exists
+            if current_row:
                 await conn.execute(
                     """
                     UPDATE fact_asp_master
-                    SET effective_to = $1 - INTERVAL '1 day'
+                    SET effective_to = $1
                     WHERE asp_id = $2
                     """,
-                    effective_from,
-                    current.asp_id,
+                    close_date,
+                    current_row["asp_id"],
                 )
 
-            # Insert new ASP record
+            # Insert new ASP row
             await conn.execute(
                 """
                 INSERT INTO fact_asp_master
-                    (oem_id, segment_id, fuel_id, effective_from, asp_inr_lakhs, source, notes)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    (oem_id, segment_id, asp_inr_lakhs, effective_from, effective_to, source, notes)
+                VALUES ($1, $2, $3, $4, NULL, $5, $6)
                 """,
-                oem_id, segment_id, fuel_id, effective_from,
-                asp_inr_lakhs, source, notes,
+                oem_id,
+                segment_id,
+                asp_inr_lakhs,
+                effective_from,
+                source,
+                notes or "",
             )
 
-    log.info("asp_manager.updated", old_asp=old_asp, new_asp=asp_inr_lakhs)
+    logger.info(
+        "asp_manager.updated",
+        oem_id=oem_id,
+        segment_id=segment_id,
+        old_asp=old_asp,
+        new_asp=asp_inr_lakhs,
+    )
+
     return ASPUpdateResult(
         old_asp=old_asp,
         new_asp=asp_inr_lakhs,
-        oem_name=oem_name,
-        segment_code=segment_code,
+        oem_id=oem_id,
+        segment_id=segment_id,
         effective_from=effective_from,
+        dry_run=False,
     )
-
-
-async def list_asp_assumptions(
-    pool: asyncpg.Pool,
-    as_of: Optional[date] = None,
-    segment_code: Optional[str] = None,
-) -> List[ASPRecord]:
-    """
-    List all current ASP assumptions.
-
-    Args:
-        pool: asyncpg connection pool
-        as_of: date for which ASPs are needed (defaults to today)
-        segment_code: optional filter by segment
-
-    Returns:
-        List of ASPRecord
-    """
-    as_of = as_of or date.today()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT
-                fam.asp_id,
-                do2.oem_name,
-                ds.segment_code,
-                fam.fuel_id,
-                fam.effective_from,
-                fam.effective_to,
-                fam.asp_inr_lakhs,
-                fam.source,
-                fam.notes
-            FROM fact_asp_master fam
-            JOIN dim_oem do2 ON do2.oem_id = fam.oem_id
-            JOIN dim_segment ds ON ds.segment_id = fam.segment_id AND ds.sub_segment IS NULL
-            WHERE fam.effective_from <= $1
-              AND (fam.effective_to IS NULL OR fam.effective_to >= $1)
-              AND ($2::VARCHAR IS NULL OR ds.segment_code = $2)
-            ORDER BY ds.segment_code, do2.oem_name
-            """,
-            as_of, segment_code,
-        )
-    return [
-        ASPRecord(
-            asp_id=r["asp_id"],
-            oem_name=r["oem_name"],
-            segment_code=r["segment_code"],
-            fuel_id=r["fuel_id"],
-            effective_from=r["effective_from"],
-            effective_to=r["effective_to"],
-            asp_inr_lakhs=float(r["asp_inr_lakhs"]),
-            source=r["source"],
-            notes=r["notes"],
-        )
-        for r in rows
-    ]

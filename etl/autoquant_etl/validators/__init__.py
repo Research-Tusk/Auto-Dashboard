@@ -1,15 +1,13 @@
-"""AutoQuant ETL — Validators package."""
+"""
+AutoQuant ETL — Validators Package
+=====================================
+Re-exports validation gate components.
+"""
 
-from autoquant_etl.validators.gate import (
-    run_validation_gate,
-    GateResult,
-    GateCheck,
-    GateConfig,
-)
+from autoquant_etl.validators.gate import GateConfig, GateResult, run_validation_gate
 
 __all__ = [
-    "run_validation_gate",
-    "GateResult",
-    "GateCheck",
     "GateConfig",
+    "GateResult",
+    "run_validation_gate",
 ]
