@@ -2,55 +2,157 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ------------------------------------------------------------------ */
+/* CSS custom properties — brand & semantic tokens                     */
+/* ------------------------------------------------------------------ */
 :root {
-  --foreground-rgb: 15, 23, 42;
-  --background-rgb: 248, 250, 252;
+  --brand-50:  #eef2ff;
+  --brand-100: #e0e7ff;
+  --brand-200: #c7d2fe;
+  --brand-300: #a5b4fc;
+  --brand-400: #818cf8;
+  --brand-500: #6366f1;
+  --brand-600: #4f46e5;
+  --brand-700: #4338ca;
+  --brand-800: #3730a3;
+  --brand-900: #312e81;
+
+  --surface-0:   #ffffff;
+  --surface-50:  #f8fafc;
+  --surface-100: #f1f5f9;
+  --surface-200: #e2e8f0;
+  --surface-300: #cbd5e1;
+
+  --text-primary:   #0f172a;
+  --text-secondary: #475569;
+  --text-muted:     #94a3b8;
+
+  --positive: #059669;
+  --negative: #dc2626;
+  --neutral:  #94a3b8;
+}
+
+/* ------------------------------------------------------------------ */
+/* Base resets & antialiasing                                          */
+/* ------------------------------------------------------------------ */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
 body {
-  color: rgb(var(--foreground-rgb));
-  background: rgb(var(--background-rgb));
-  font-family: 'Inter', system-ui, sans-serif;
+  margin: 0;
+  background-color: var(--surface-50);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Chart container sizing */
-.chart-container {
-  @apply w-full;
-  min-height: 300px;
+/* ------------------------------------------------------------------ */
+/* Tabular numbers — apply to all data cells, KPI values              */
+/* ------------------------------------------------------------------ */
+@layer utilities {
+  .tabular-nums {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  .slashed-zero {
+    font-variant-numeric: slashed-zero;
+  }
 }
 
-/* KPI card styles */
-.kpi-card {
-  @apply bg-white rounded-xl border border-slate-200 p-6 shadow-sm;
-}
+/* ------------------------------------------------------------------ */
+/* Component classes                                                   */
+/* ------------------------------------------------------------------ */
+@layer components {
 
-/* Disclaimer banner */
-.disclaimer-banner {
-  @apply text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2;
-}
+  /* KPI card */
+  .kpi-card {
+    @apply bg-white rounded-xl border border-slate-200 px-5 py-4 shadow-sm;
+    font-variant-numeric: tabular-nums lining-nums;
+  }
 
-/* Table styles */
-.data-table {
-  @apply w-full text-sm;
-}
+  /* Disclaimer banner */
+  .disclaimer-banner {
+    @apply bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5 text-xs text-amber-800;
+    font-size: 0.75rem;
+    line-height: 1.4;
+  }
 
-.data-table th {
-  @apply text-left text-slate-500 font-medium pb-2 border-b border-slate-200;
-}
+  /* Skeleton loader */
+  .skeleton {
+    @apply bg-slate-200 rounded animate-pulse;
+  }
 
-.data-table td {
-  @apply py-2 border-b border-slate-100;
-}
+  /* Sortable table header */
+  .th-sortable {
+    @apply cursor-pointer select-none hover:bg-slate-100 transition-colors;
+  }
 
-/* Loading skeleton */
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
+  /* Sticky table header row */
+  .thead-sticky th {
+    @apply sticky top-0 z-10 bg-slate-50 border-b border-slate-200;
+  }
 
-.skeleton {
-  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
-  @apply rounded;
+  /* Data table base styles */
+  .data-table {
+    @apply w-full text-sm border-collapse;
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  .data-table th {
+    @apply px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide bg-slate-50 border-b border-slate-200;
+  }
+
+  .data-table td {
+    @apply px-3 py-2.5 text-sm text-slate-800 border-b border-slate-100;
+  }
+
+  .data-table tbody tr:hover td {
+    @apply bg-slate-50;
+  }
+
+  /* Nav link */
+  .nav-link {
+    @apply text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors px-1 py-0.5;
+  }
+
+  .nav-link-active {
+    @apply text-brand-600 border-b-2 border-brand-600;
+  }
+
+  /* Section card */
+  .section-card {
+    @apply bg-white rounded-xl border border-slate-200 p-6 shadow-sm;
+  }
+
+  /* Segment tab button */
+  .segment-tab {
+    @apply px-3 py-1.5 rounded text-xs font-semibold transition-all;
+  }
+
+  .segment-tab-active {
+    @apply bg-brand-600 text-white shadow-sm;
+  }
+
+  .segment-tab-inactive {
+    @apply bg-white text-slate-600 border border-slate-200 hover:border-brand-400 hover:text-brand-600;
+  }
+
+  /* Delta badge */
+  .delta-positive {
+    @apply text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded text-xs font-semibold;
+  }
+
+  .delta-negative {
+    @apply text-red-700 bg-red-50 px-1.5 py-0.5 rounded text-xs font-semibold;
+  }
+
+  .delta-neutral {
+    @apply text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded text-xs font-semibold;
+  }
 }
