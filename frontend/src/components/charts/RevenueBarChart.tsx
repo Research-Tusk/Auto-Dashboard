@@ -1,49 +1,63 @@
 'use client';
 
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  type TooltipProps,
 } from 'recharts';
+import type { RevenueChartPoint } from '@/types';
+import { formatCrores, formatUnits } from '@/lib/format';
 
-interface RevenueDataPoint {
-  quarter: string;
-  total_cr: number;
+interface Props {
+  data: RevenueChartPoint[];
+  height?: number;
 }
 
-interface RevenueBarChartProps {
-  data: RevenueDataPoint[];
-}
-
-export function RevenueBarChart({ data }: RevenueBarChartProps) {
-  if (!data.length) {
-    return <div className="h-64 flex items-center justify-center text-slate-400">No data</div>;
-  }
-
+function CustomTooltip({ active, payload, label }: TooltipProps<number, string>) {
+  if (!active || !payload?.length) return null;
   return (
-    <ResponsiveContainer width="100%" height={280}>
-      <BarChart data={data} margin={{ top: 5, right: 20, left: 40, bottom: 5 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+    <div className="bg-white border border-slate-200 rounded-lg shadow-lg px-3 py-2 text-xs">
+      <p className="font-semibold text-slate-700 mb-1">{label}</p>
+      {payload.map((entry) => (
+        <div key={entry.name} className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full" style={{ background: entry.color }} />
+          <span className="text-slate-600">{entry.name}:</span>
+          <span className="font-medium text-slate-900">
+            {entry.name === 'Revenue (Cr)'
+              ? formatCrores(entry.value as number)
+              : formatUnits(entry.value as number)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function RevenueBarChart({ data, height = 240 }: Props) {
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <BarChart data={data} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
         <XAxis
           dataKey="quarter"
-          tick={{ fontSize: 12, fill: '#94a3b8' }}
+          tick={{ fontSize: 11, fill: '#94a3b8' }}
           axisLine={false}
           tickLine={false}
         />
         <YAxis
-          tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K Cr`}
-          tick={{ fontSize: 12, fill: '#94a3b8' }}
+          tick={{ fontSize: 11, fill: '#94a3b8' }}
           axisLine={false}
           tickLine={false}
+          width={56}
+          tickFormatter={(v) => `₹${(v / 100).toFixed(0)}Cr`}
         />
-        <Tooltip
-          formatter={(value: number) => [`₹${value.toLocaleString()} Cr`, 'Revenue Proxy']}
-          contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0' }}
-        />
-        <Bar
-          dataKey="total_cr"
-          fill="#6366f1"
-          radius={[4, 4, 0, 0]}
-          name="Revenue Proxy (Cr)"
-        />
+        <Tooltip content={<CustomTooltip />} />
+        <Bar dataKey="revenue_cr" name="Revenue (Cr)" fill="#3b82f6" radius={[3, 3, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );

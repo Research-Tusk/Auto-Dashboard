@@ -9,92 +9,68 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
+  type TooltipProps,
 } from 'recharts';
 
-interface TIVDataPoint {
-  month_key: string;
-  tiv_units: number;
-  ev_units: number;
-  ev_penetration_pct?: number;
+const COLORS = [
+  '#3b82f6', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6',
+  '#ec4899', '#14b8a6', '#f97316', '#64748b', '#a855f7',
+];
+
+interface Props {
+  data: Record<string, number | string>[];
+  lines: string[];
+  height?: number;
 }
 
-interface SegmentTrendChartProps {
-  data: TIVDataPoint[];
-  showEV?: boolean;
-}
-
-export function SegmentTrendChart({ data, showEV = true }: SegmentTrendChartProps) {
-  if (!data.length) {
-    return (
-      <div className="h-64 flex items-center justify-center text-slate-400">
-        No data available
-      </div>
-    );
-  }
-
+function CustomTooltip({ active, payload, label }: TooltipProps<number, string>) {
+  if (!active || !payload?.length) return null;
   return (
-    <ResponsiveContainer width="100%" height={280}>
-      <LineChart data={data} margin={{ top: 5, right: 20, left: 40, bottom: 5 }}>
+    <div className="bg-white border border-slate-200 rounded-lg shadow-lg px-3 py-2 text-xs">
+      <p className="font-semibold text-slate-700 mb-1">{label}</p>
+      {payload.map((entry) => (
+        <div key={entry.name} className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full" style={{ background: entry.color }} />
+          <span className="text-slate-600">{entry.name}:</span>
+          <span className="font-medium text-slate-900">{entry.value?.toFixed(1)}%</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function SegmentTrendChart({ data, lines, height = 240 }: Props) {
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <LineChart data={data} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
         <XAxis
-          dataKey="month_key"
-          tickFormatter={(v) => {
-            // Format as 'MMM YY'
-            if (!v) return '';
-            const d = new Date(v);
-            return d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
-          }}
+          dataKey="quarter"
           tick={{ fontSize: 11, fill: '#94a3b8' }}
           axisLine={false}
           tickLine={false}
-          interval={1}
         />
         <YAxis
-          tickFormatter={(v) =>
-            v >= 1_000_000
-              ? `${(v / 1_000_000).toFixed(1)}M`
-              : `${(v / 1_000).toFixed(0)}K`
-          }
+          tickFormatter={(v) => `${v}%`}
           tick={{ fontSize: 11, fill: '#94a3b8' }}
           axisLine={false}
           tickLine={false}
+          width={40}
         />
-        <Tooltip
-          formatter={(value: number, name: string) => [
-            value.toLocaleString(),
-            name,
-          ]}
-          labelFormatter={(label) => {
-            if (!label) return '';
-            const d = new Date(label);
-            return d.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
-          }}
-          contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0' }}
-        />
-        <Legend />
-        <Line
-          type="monotone"
-          dataKey="tiv_units"
-          stroke="#3b82f6"
-          strokeWidth={2}
-          dot={false}
-          name="Total Units"
-        />
-        {showEV && (
+        <Tooltip content={<CustomTooltip />} />
+        <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
+        {lines.map((key, i) => (
           <Line
+            key={key}
             type="monotone"
-            dataKey="ev_units"
-            stroke="#8b5cf6"
+            dataKey={key}
+            stroke={COLORS[i % COLORS.length]}
             strokeWidth={2}
             dot={false}
-            strokeDasharray="4 2"
-            name="EV Units"
+            activeDot={{ r: 4 }}
           />
-        )}
+        ))}
       </LineChart>
     </ResponsiveContainer>
   );
 }
-
-// Alias for backward compat
-export const TIVLineChart = SegmentTrendChart;

@@ -1,63 +1,85 @@
 'use client';
 
 import {
-  PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  type TooltipProps,
 } from 'recharts';
 
-interface PowertrainDataPoint {
-  name: string;
-  value: number;
-}
-
-interface PowertrainMixChartProps {
-  data: PowertrainDataPoint[];
-}
-
 const POWERTRAIN_COLORS: Record<string, string> = {
-  'PV ICE': '#3b82f6',
-  'PV EV':  '#8b5cf6',
-  'CV ICE': '#f59e0b',
-  'CV EV':  '#f97316',
-  '2W ICE': '#10b981',
-  '2W EV':  '#34d399',
+  ICE: '#64748b',
+  EV: '#10b981',
+  HEV: '#3b82f6',
+  PHEV: '#8b5cf6',
+  CNG: '#f59e0b',
+  OTHER: '#e2e8f0',
 };
 
-const DEFAULT_COLORS = ['#6366f1', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#06b6d4'];
+interface PowertrainDataPoint {
+  quarter: string;
+  [powertrain: string]: number | string;
+}
 
-export function PowertrainMixChart({ data }: PowertrainMixChartProps) {
-  if (!data.length || data.every(d => d.value === 0)) {
-    return <div className="h-64 flex items-center justify-center text-slate-400">No data</div>;
-  }
+interface Props {
+  data: PowertrainDataPoint[];
+  keys: string[];
+  height?: number;
+}
 
+function CustomTooltip({ active, payload, label }: TooltipProps<number, string>) {
+  if (!active || !payload?.length) return null;
+  const total = payload.reduce((s, p) => s + (p.value as number ?? 0), 0);
   return (
-    <ResponsiveContainer width="100%" height={250}>
-      <PieChart>
-        <Pie
-          data={data}
-          cx="50%"
-          cy="50%"
-          innerRadius={60}
-          outerRadius={100}
-          paddingAngle={2}
-          dataKey="value"
-          label={({ name, percent }) =>
-            percent > 0.05 ? `${name} ${(percent * 100).toFixed(0)}%` : ''
-          }
-          labelLine={false}
-        >
-          {data.map((entry, index) => (
-            <Cell
-              key={entry.name}
-              fill={POWERTRAIN_COLORS[entry.name] ?? DEFAULT_COLORS[index % DEFAULT_COLORS.length]}
-            />
-          ))}
-        </Pie>
-        <Tooltip
-          formatter={(value: number) => [value.toLocaleString(), 'Units']}
-          contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0' }}
+    <div className="bg-white border border-slate-200 rounded-lg shadow-lg px-3 py-2 text-xs">
+      <p className="font-semibold text-slate-700 mb-1">{label}</p>
+      {payload.map((entry) => (
+        <div key={entry.name} className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full" style={{ background: entry.color }} />
+          <span className="text-slate-600">{entry.name}:</span>
+          <span className="font-medium text-slate-900">
+            {total > 0 ? ((entry.value as number / total) * 100).toFixed(1) : '0.0'}%
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function PowertrainMixChart({ data, keys, height = 240 }: Props) {
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <BarChart data={data} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+        <XAxis
+          dataKey="quarter"
+          tick={{ fontSize: 11, fill: '#94a3b8' }}
+          axisLine={false}
+          tickLine={false}
         />
-        <Legend />
-      </PieChart>
+        <YAxis
+          tick={{ fontSize: 11, fill: '#94a3b8' }}
+          axisLine={false}
+          tickLine={false}
+          width={48}
+          tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+        />
+        <Tooltip content={<CustomTooltip />} />
+        <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
+        {keys.map((key) => (
+          <Bar
+            key={key}
+            dataKey={key}
+            stackId="a"
+            fill={POWERTRAIN_COLORS[key] ?? '#94a3b8'}
+          />
+        ))}
+      </BarChart>
     </ResponsiveContainer>
   );
 }
