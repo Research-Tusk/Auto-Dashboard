@@ -1,46 +1,37 @@
+import { clsx } from 'clsx';
+import { twMerge } from 'tailwind-merge';
+import type { ReactNode } from 'react';
+
+type Accent = 'brand' | 'positive' | 'negative' | 'neutral';
+
 interface KPICardProps {
   label: string;
-  value: string | number;
-  sub?: string;
-  trend?: number;       // positive = up, negative = down
-  trendLabel?: string;
+  value: ReactNode;
+  sub?: ReactNode;
+  accent?: Accent;
   loading?: boolean;
-  color?: 'default' | 'green' | 'violet' | 'amber' | 'red';
 }
 
-const COLOR_CLASSES = {
-  default: 'text-slate-900',
-  green:   'text-emerald-600',
-  violet:  'text-violet-600',
-  amber:   'text-amber-600',
-  red:     'text-red-600',
+const ACCENT_CLASSES: Record<Accent, string> = {
+  brand: 'text-brand-700',
+  positive: 'text-emerald-600',
+  negative: 'text-red-500',
+  neutral: 'text-slate-700',
 };
 
-export function KPICard({
-  label, value, sub, trend, trendLabel, loading = false, color = 'default'
-}: KPICardProps) {
-  if (loading) {
-    return (
-      <div className="kpi-card">
-        <div className="skeleton h-8 w-24 mb-2" />
-        <div className="skeleton h-4 w-16" />
-      </div>
-    );
-  }
-
-  const trendColor = trend == null ? '' : trend >= 0 ? 'text-emerald-500' : 'text-red-500';
-  const trendArrow = trend == null ? '' : trend >= 0 ? '↑' : '↓';
-
+export function KPICard({ label, value, sub, accent = 'neutral', loading = false }: KPICardProps) {
   return (
-    <div className="kpi-card">
-      <div className={`text-2xl font-bold ${COLOR_CLASSES[color]}`}>{value}</div>
-      {sub && <div className="text-sm text-slate-400 mt-0.5">{sub}</div>}
-      <div className="text-sm text-slate-500 mt-1">{label}</div>
-      {trend != null && (
-        <div className={`text-xs mt-1 ${trendColor}`}>
-          {trendArrow} {Math.abs(trend).toFixed(1)}%
-          {trendLabel && <span className="text-slate-400 ml-1">{trendLabel}</span>}
-        </div>
+    <div className={twMerge('section-card flex flex-col gap-1 min-w-0', loading ? 'animate-pulse' : '')}>
+      <p className="text-xs font-medium text-slate-500 truncate">{label}</p>
+      {loading ? (
+        <div className="h-7 bg-slate-100 rounded w-2/3" />
+      ) : (
+        <p className={clsx('text-2xl font-bold tabular-nums tracking-tight truncate', ACCENT_CLASSES[accent])}>
+          {value}
+        </p>
+      )}
+      {sub && !loading && (
+        <p className="text-xs text-slate-400 truncate">{sub}</p>
       )}
     </div>
   );

@@ -1,137 +1,113 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
+import { clsx } from 'clsx';
 
-interface Column<T> {
-  key: keyof T;
+export interface Column<T> {
+  key: keyof T & string;
   label: string;
-  render?: (value: T[keyof T], row: T) => React.ReactNode;
-  align?: 'left' | 'right' | 'center';
   sortable?: boolean;
+  align?: 'left' | 'right' | 'center';
+  render?: (row: T) => ReactNode;
 }
 
 interface DataTableProps<T> {
   columns: Column<T>[];
   data: T[];
-  loading?: boolean;
+  rowKey: (row: T) => string;
+  defaultSortKey?: keyof T & string;
+  defaultSortDir?: 'asc' | 'desc';
   emptyMessage?: string;
-  pageSize?: number;
+  maxRows?: number;
 }
 
-type SortDir = 'asc' | 'desc';
-
-export function DataTable<T extends Record<string, unknown>>({
+export function DataTable<T>({
   columns,
   data,
-  loading = false,
-  emptyMessage = 'No data available',
-  pageSize = 20,
+  rowKey,
+  defaultSortKey,
+  defaultSortDir = 'asc',
+  emptyMessage = 'No data',
+  maxRows,
 }: DataTableProps<T>) {
-  const [sortKey, setSortKey] = useState<keyof T | null>(null);
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
-  const [page, setPage] = useState(0);
+  const [sortKey, setSortKey] = useState<keyof T & string | undefined>(defaultSortKey);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>(defaultSortDir);
 
-  const handleSort = (key: keyof T) => {
+  const handleSort = (key: keyof T & string) => {
     if (sortKey === key) {
-      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+      setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
     } else {
       setSortKey(key);
-      setSortDir('desc');
+      setSortDir('asc');
     }
-    setPage(0);
   };
 
   const sorted = [...data].sort((a, b) => {
     if (!sortKey) return 0;
     const av = a[sortKey];
     const bv = b[sortKey];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
     const cmp = av < bv ? -1 : av > bv ? 1 : 0;
     return sortDir === 'asc' ? cmp : -cmp;
   });
 
-  const paginated = sorted.slice(page * pageSize, (page + 1) * pageSize);
-  const totalPages = Math.ceil(data.length / pageSize);
+  const visible = maxRows ? sorted.slice(0, maxRows) : sorted;
 
-  if (loading) {
+  if (data.length === 0) {
     return (
-      <div className="space-y-2">
-        {[...Array(5)].map((_, i) => (
-          <div key={i} className="skeleton h-10 w-full rounded" />
-        ))}
-      </div>
+      <div className="py-10 text-center text-sm text-slate-400">{emptyMessage}</div>
     );
   }
 
-  if (!data.length) {
-    return <div className="text-center py-12 text-slate-400 text-sm">{emptyMessage}</div>;
-  }
-
   return (
-    <div>
-      <div className="overflow-auto">
-        <table className="data-table min-w-full">
-          <thead>
-            <tr>
-              {columns.map(col => (
-                <th
-                  key={String(col.key)}
-                  onClick={() => col.sortable !== false && handleSort(col.key)}
-                  className={`${
+    <div className="overflow-x-auto -mx-1">
+      <table className="min-w-full text-sm">
+        <thead>
+          <tr className="border-b border-slate-100">
+            {columns.map((col) => (
+              <th
+                key={col.key}
+                className={clsx(
+                  'px-3 py-2 text-xs font-semibold text-slate-500 whitespace-nowrap',
+                  col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left',
+                  col.sortable ? 'cursor-pointer select-none hover:text-slate-900' : ''
+                )}
+                onClick={col.sortable ? () => handleSort(col.key) : undefined}
+              >
+                {col.label}
+                {col.sortable && sortKey === col.key && (
+                  <span className="ml-1 text-brand-500">
+                    {sortDir === 'asc' ? '↑' : '↓'}
+                  </span>
+                )}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-50">
+          {visible.map((row) => (
+            <tr key={rowKey(row)} className="hover:bg-slate-50/60 transition-colors">
+              {columns.map((col) => (
+                <td
+                  key={col.key}
+                  className={clsx(
+                    'px-3 py-2.5 text-slate-700 whitespace-nowrap',
                     col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'
-                  } ${
-                    col.sortable !== false ? 'cursor-pointer hover:text-slate-900 select-none' : ''
-                  }`}
-                >
-                  {col.label}
-                  {sortKey === col.key && (
-                    <span className="ml-1 text-brand-500">{sortDir === 'asc' ? '↑' : '↓'}</span>
                   )}
-                </th>
+                >
+                  {col.render ? col.render(row) : String(row[col.key] ?? '—')}
+                </td>
               ))}
             </tr>
-          </thead>
-          <tbody>
-            {paginated.map((row, i) => (
-              <tr key={i} className="hover:bg-slate-50 transition-colors">
-                {columns.map(col => (
-                  <td
-                    key={String(col.key)}
-                    className={col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : ''}
-                  >
-                    {col.render
-                      ? col.render(row[col.key], row)
-                      : String(row[col.key] ?? '—')}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between mt-4">
-          <p className="text-sm text-slate-500">
-            {page * pageSize + 1}–{Math.min((page + 1) * pageSize, data.length)} of {data.length}
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setPage(p => Math.max(0, p - 1))}
-              disabled={page === 0}
-              className="px-3 py-1 text-sm border border-slate-200 rounded disabled:opacity-40"
-            >
-              Prev
-            </button>
-            <button
-              onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-              disabled={page === totalPages - 1}
-              className="px-3 py-1 text-sm border border-slate-200 rounded disabled:opacity-40"
-            >
-              Next
-            </button>
-          </div>
-        </div>
+          ))}
+        </tbody>
+      </table>
+      {maxRows && sorted.length > maxRows && (
+        <p className="mt-2 text-center text-xs text-slate-400">
+          Showing {maxRows} of {sorted.length} rows
+        </p>
       )}
     </div>
   );

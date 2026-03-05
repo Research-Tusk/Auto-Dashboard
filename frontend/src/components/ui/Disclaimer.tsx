@@ -1,23 +1,22 @@
 interface DisclaimerProps {
-  className?: string;
-  compact?: boolean;
+  variant?: 'inline' | 'banner';
 }
 
-export function Disclaimer({ className = '', compact = false }: DisclaimerProps) {
-  if (compact) {
+export function Disclaimer({ variant = 'inline' }: DisclaimerProps) {
+  const text =
+    'Revenue figures are demand-side estimates (registrations × ASP proxy) and do NOT represent reported financials. For investment decisions, refer to official company filings.';
+
+  if (variant === 'banner') {
     return (
-      <p className={`text-xs text-amber-700 ${className}`}>
-        ⚠️ Demand proxy only — NOT accounting revenue.
-      </p>
+      <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-xs text-amber-800 leading-relaxed">
+        <span className="font-semibold">Disclaimer: </span>{text}
+      </div>
     );
   }
 
   return (
-    <div className={`disclaimer-banner ${className}`}>
-      <strong>⚠️ Important Disclaimer:</strong> All revenue figures are demand-based proxies
-      calculated as <em>retail registrations × analyst ASP assumption</em>. This is{' '}
-      <strong>NOT</strong> reported accounting revenue. Do not use for investment decisions
-      without cross-referencing official OEM quarterly results.
-    </div>
+    <p className="text-xs text-slate-400 italic leading-relaxed">
+      <span className="font-medium not-italic">Note: </span>{text}
+    </p>
   );
 }
