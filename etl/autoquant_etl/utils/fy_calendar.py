@@ -1,98 +1,142 @@
 """
-AutoQuant ETL — FY Calendar Utilities
-=======================================
-India fiscal year: April 1 – March 31.
-  FY26 = April 1, 2025 – March 31, 2026
+AutoQuant ETL — India Financial Year Calendar Utilities
+=========================================================
+India's financial year runs April 1 → March 31.
+FY26 = April 1 2025 → March 31 2026.
 
-FY Quarter mapping:
-  Q1FY26 = Apr-Jun 2025
-  Q2FY26 = Jul-Sep 2025
-  Q3FY26 = Oct-Dec 2025
-  Q4FY26 = Jan-Mar 2026
+Quarter mapping (within an FY):
+  Q1: Apr–Jun
+  Q2: Jul–Sep
+  Q3: Oct–Dec
+  Q4: Jan–Mar
+
+Quarter notation: Q{n}FY{yy}  e.g. Q3FY26
 """
 
 from __future__ import annotations
 
+import re
+from calendar import monthrange
 from datetime import date
-from typing import List
+from typing import Tuple
 
 
-def month_to_fy_year(d: date) -> str:
+def date_to_fy(d: date) -> str:
     """
-    Return FY year string for a given date.
+    Return the Indian Financial Year label for a given date.
 
-    Examples:
-        2025-04-01 → 'FY26'
-        2026-01-15 → 'FY26'
-        2025-03-31 → 'FY25'
+    The FY label uses the *end* calendar year (two-digit suffix).
+    e.g. April 2025 – March 2026  → "FY26"
+
+    Args:
+        d: any calendar date
+
+    Returns:
+        FY label string such as "FY26"
     """
+    # FY ends in March of the following calendar year
+    # April 2025 is start of FY26; January 2026 is still FY26
     if d.month >= 4:
-        return f"FY{(d.year + 1) % 100:02d}"
-    return f"FY{d.year % 100:02d}"
+        fy_end_year = d.year + 1
+    else:
+        fy_end_year = d.year
+
+    return f"FY{fy_end_year % 100:02d}"
 
 
-def month_to_fy_quarter(d: date) -> str:
+def date_to_fy_quarter(d: date) -> str:
     """
-    Return FY quarter string for a given date.
+    Return the Indian FY quarter label for a given date.
 
-    Examples:
-        2025-04-01 → 'Q1FY26'
-        2025-07-15 → 'Q2FY26'
-        2025-10-01 → 'Q3FY26'
-        2026-01-31 → 'Q4FY26'
+    Quarter mapping:
+      Q1: Apr–Jun
+      Q2: Jul–Sep
+      Q3: Oct–Dec
+      Q4: Jan–Mar
+
+    Args:
+        d: any calendar date
+
+    Returns:
+        Quarter label such as "Q3FY26"
+
+    Example:
+        >>> date_to_fy_quarter(date(2026, 1, 15))
+        'Q3FY26'
     """
-    fy = month_to_fy_year(d)
     month = d.month
 
     if month in (4, 5, 6):
-        q = "Q1"
+        q = 1
     elif month in (7, 8, 9):
-        q = "Q2"
+        q = 2
     elif month in (10, 11, 12):
-        q = "Q3"
+        q = 3
     else:  # 1, 2, 3
-        q = "Q4"
+        q = 4
 
-    return f"{q}{fy}"
+    fy = date_to_fy(d)
+    return f"Q{q}{fy}"
 
 
-def fy_quarter_months(fy_quarter: str) -> List[date]:
+def fy_quarter_date_range(quarter: str) -> Tuple[date, date]:
     """
-    Return list of first-of-month dates for a given FY quarter string.
+    Return the (start_date, end_date) inclusive for an FY quarter string.
 
     Args:
-        fy_quarter: e.g. 'Q3FY26'
+        quarter: e.g. "Q3FY26"
 
     Returns:
-        List of 3 date objects (first day of each month in the quarter)
+        Tuple of (start_date, end_date) where both are inclusive.
+        e.g. "Q3FY26" → (date(2025, 10, 1), date(2025, 12, 31))
 
-    Example:
-        fy_quarter_months('Q3FY26') → [2025-10-01, 2025-11-01, 2025-12-01]
+    Raises:
+        ValueError: if the quarter string is not recognised
     """
-    # Parse quarter number and FY year
-    q_num = int(fy_quarter[1])  # 1-4
-    fy_year_short = int(fy_quarter[4:])  # e.g. 26
+    pattern = re.fullmatch(r"Q([1-4])FY(\d{2})", quarter, re.IGNORECASE)
+    if not pattern:
+        raise ValueError(
+            f"Invalid quarter format: '{quarter}'. Expected Q{{1-4}}FY{{YY}} e.g. Q3FY26"
+        )
 
-    # Convert FY year to calendar year
-    # FY26 starts in April 2025, ends March 2026
-    cal_year_start = 2000 + fy_year_short - 1  # e.g. 2025 for FY26
+    q_num = int(pattern.group(1))
+    fy_yy = int(pattern.group(2))
 
-    quarter_start_months = {1: (cal_year_start, 4), 2: (cal_year_start, 7),
-                            3: (cal_year_start, 10), 4: (cal_year_start + 1, 1)}
-    start_year, start_month = quarter_start_months[q_num]
+    # Resolve two-digit year: 00-49 → 2000-2049, 50-99 → 1950-1999
+    if fy_yy < 50:
+        fy_end_year = 2000 + fy_yy
+    else:
+        fy_end_year = 1900 + fy_yy
 
-    months = []
-    for i in range(3):
-        month = start_month + i
-        year = start_year
-        if month > 12:
-            month -= 12
-            year += 1
-        months.append(date(year, month, 1))
+    # fy_end_year is the calendar year in which Q4 (Jan-Mar) falls
+    fy_start_year = fy_end_year - 1
 
-    return months
+    # Quarter → calendar months
+    quarter_months = {
+        1: (4, 6, fy_start_year),   # Apr–Jun of FY start year
+        2: (7, 9, fy_start_year),   # Jul–Sep of FY start year
+        3: (10, 12, fy_start_year), # Oct–Dec of FY start year
+        4: (1, 3, fy_end_year),     # Jan–Mar of FY end year
+    }
+
+    start_month, end_month, cal_year = quarter_months[q_num]
+
+    start_date = date(cal_year, start_month, 1)
+    last_day = monthrange(cal_year, end_month)[1]
+    end_date = date(cal_year, end_month, last_day)
+
+    return start_date, end_date
 
 
-def current_fy_quarter() -> str:
-    """Return the current FY quarter string based on today's date."""
-    return month_to_fy_quarter(date.today())
+def current_fy_quarter(reference: date | None = None) -> str:
+    """
+    Return the current (or reference date's) FY quarter label.
+
+    Args:
+        reference: optional date override; defaults to today
+
+    Returns:
+        FY quarter string e.g. "Q4FY26"
+    """
+    d = reference or date.today()
+    return date_to_fy_quarter(d)

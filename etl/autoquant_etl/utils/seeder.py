@@ -1,77 +1,92 @@
 """
-AutoQuant ETL — Dimension Table Seeder
-Seeds dim_* tables from the SQL seed files in db/
+AutoQuant ETL — Dimension Seeder
+==================================
+Executes seed SQL files from etl/seeds/ to populate dimension tables.
+
+Guard: checks dim_oem row count before seeding to avoid re-seeding
+an already-populated database. Use --force to override.
+
+Seed files must be in the etl/seeds/ directory and will be executed
+in lexicographic order.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 import asyncpg
 import structlog
 
 logger = structlog.get_logger(__name__)
 
-# Seed files relative to repo root (etl/ is the working dir when running)
-SEED_FILES = [
-    Path("../db/002_seed_dimensions_v2.sql"),
-    Path("../db/003_seed_asp.sql"),
-]
+# Seeds directory: etl/seeds/ relative to repo root
+# When running from inside the etl/ package, resolve via two levels up
+SEEDS_DIR = Path(__file__).parent.parent.parent.parent / "seeds"
 
-# Check markers: query to verify if seeding is needed
-SEED_CHECK_QUERIES = [
-    "SELECT COUNT(*) FROM dim_oem",
-    "SELECT COUNT(*) FROM fact_asp_master",
-]
+# Threshold: if dim_oem already has this many rows, skip seeding
+ALREADY_SEEDED_THRESHOLD = 1
 
 
 async def run_seed(
     pool: asyncpg.Pool,
     force: bool = False,
     verbose: bool = False,
+    seeds_dir: Optional[Path] = None,
 ) -> None:
     """
-    Seed dimension tables from SQL files.
+    Execute seed SQL files to populate dimension tables.
 
-    Skips seeding if tables already have data (unless force=True).
+    Checks dim_oem row count first. If rows exist and force=False,
+    skips seeding (idempotent behaviour).
 
     Args:
         pool: asyncpg connection pool
-        force: re-run seed even if tables already have data
-        verbose: enable verbose logging
+        force: if True, re-run seeds even if data already exists
+        verbose: enable verbose per-file logging
+        seeds_dir: override default seeds directory path
     """
+    directory = seeds_dir or SEEDS_DIR
+
     async with pool.acquire() as conn:
-        # Check if already seeded
-        if not force:
-            already_seeded = True
-            for check_query in SEED_CHECK_QUERIES:
-                try:
-                    count = await conn.fetchval(check_query)
-                    if count == 0:
-                        already_seeded = False
-                        break
-                except Exception:
-                    already_seeded = False
-                    break
+        # Guard: check if already seeded
+        try:
+            oem_count: int = await conn.fetchval("SELECT COUNT(*) FROM dim_oem")
+        except asyncpg.UndefinedTableError:
+            logger.warning("seeder.dim_oem_missing")
+            oem_count = 0
 
-            if already_seeded:
-                logger.info("seeder.already_seeded")
-                return
+        if oem_count >= ALREADY_SEEDED_THRESHOLD and not force:
+            logger.info(
+                "seeder.already_seeded",
+                dim_oem_count=oem_count,
+                hint="Use --force to re-seed",
+            )
+            return
 
-        # Apply seed files
-        for seed_file in SEED_FILES:
-            if not seed_file.exists():
-                logger.warning("seeder.file_not_found", path=str(seed_file))
-                continue
+        if not directory.exists():
+            logger.warning("seeder.dir_not_found", path=str(directory))
+            return
 
-            sql = seed_file.read_text(encoding="utf-8")
+        seed_files = sorted(directory.glob("*.sql"))
+        if not seed_files:
+            logger.info("seeder.no_files", directory=str(directory))
+            return
 
+        for seed_file in seed_files:
+            sql_content = seed_file.read_text(encoding="utf-8")
+            if verbose:
+                logger.debug("seeder.executing", filename=seed_file.name)
             try:
                 async with conn.transaction():
-                    await conn.execute(sql)
-                logger.info("seeder.applied", file=seed_file.name)
+                    await conn.execute(sql_content)
+                logger.info("seeder.executed", filename=seed_file.name)
             except Exception as exc:
-                logger.error("seeder.failed", file=seed_file.name, error=str(exc))
-                raise
+                logger.error(
+                    "seeder.failed",
+                    filename=seed_file.name,
+                    error=str(exc),
+                )
+                raise RuntimeError(f"Seed file '{seed_file.name}' failed: {exc}") from exc
 
-    logger.info("seeder.complete")
+    logger.info("seeder.complete", files_executed=len(seed_files))
