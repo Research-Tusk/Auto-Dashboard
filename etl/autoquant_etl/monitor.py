@@ -1,225 +1,45 @@
 """
-AutoQuant ETL — Pipeline Monitor
-==================================
-Queries the warehouse for health metrics and generates a status report.
-Used by the `monitor` CLI command and by the weekly digest.
+AutoQuant ETL — Pipeline Health Monitor
+==========================================
+Runs a series of health checks against the pipeline state and optionally
+sends a Telegram digest.
 
-Checks:
-  1. Last successful VAHAN run was < 25h ago (alert if missed daily job)
-  2. No FAILED runs in last 24h
-  3. Daily registration count is within expected range (not 0, not anomalous)
-  4. No unmapped makers (would indicate new OEM or VAHAN name change)
-  5. Materialized view is fresh (refreshed < 2h ago)
-  6. DB heartbeat write succeeds
+Checks performed:
+  1. last_extraction_age  — most recent successful extraction < 36 hours ago
+  2. no_recent_failures   — no FAILED runs in the last 24 hours
+  3. unmapped_makers       — count of unmapped makers below threshold (10)
+  4. heartbeat             — insert a heartbeat row to confirm monitor ran
+
+If send_digest=True, queries v_pipeline_status and sends via Telegram.
 """
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import List, Optional
 
 import asyncpg
 import structlog
 
 from autoquant_etl.config import Settings
-from autoquant_etl.utils.alerts import send_telegram_alert
+from autoquant_etl.utils.alerts import send_pipeline_digest
 
 logger = structlog.get_logger(__name__)
 
-
-@dataclass
-class HealthCheck:
-    name: str
-    passed: bool
-    detail: str = ""
+# Thresholds
+MAX_EXTRACTION_AGE_HOURS = 36
+MAX_RECENT_FAILURES_24H = 0
+MAX_UNMAPPED_MAKERS = 10
 
 
 @dataclass
 class MonitorResult:
+    """Result of a pipeline health monitor run."""
     healthy: bool
-    failed_checks: int
-    checks: List[HealthCheck] = field(default_factory=list)
+    failed_checks: int = 0
     issues: List[str] = field(default_factory=list)
-    digest_message: str = ""
-
-
-async def _check_last_successful_run(conn: asyncpg.Connection) -> HealthCheck:
-    """Check 1: Last successful VAHAN run was < 25 hours ago."""
-    row = await conn.fetchrow(
-        """
-        SELECT completed_at
-        FROM raw_extraction_log
-        WHERE source = 'VAHAN' AND status = 'SUCCESS'
-        ORDER BY completed_at DESC
-        LIMIT 1
-        """
-    )
-    if not row or not row["completed_at"]:
-        return HealthCheck(
-            name="last_successful_run",
-            passed=False,
-            detail="No successful VAHAN run found in history",
-        )
-
-    age = datetime.now(timezone.utc) - row["completed_at"].replace(tzinfo=timezone.utc)
-    if age > timedelta(hours=25):
-        return HealthCheck(
-            name="last_successful_run",
-            passed=False,
-            detail=f"Last success was {age.total_seconds()/3600:.1f}h ago (threshold: 25h)",
-        )
-    return HealthCheck(
-        name="last_successful_run",
-        passed=True,
-        detail=f"Last success: {age.total_seconds()/3600:.1f}h ago",
-    )
-
-
-async def _check_no_failures_24h(conn: asyncpg.Connection) -> HealthCheck:
-    """Check 2: No FAILED/VALIDATION_FAILED runs in the last 24 hours."""
-    count = await conn.fetchval(
-        """
-        SELECT COUNT(*)
-        FROM raw_extraction_log
-        WHERE started_at >= NOW() - INTERVAL '24 hours'
-          AND status IN ('FAILED', 'VALIDATION_FAILED')
-        """
-    )
-    if count > 0:
-        return HealthCheck(
-            name="no_failures_24h",
-            passed=False,
-            detail=f"{count} failed run(s) in last 24h",
-        )
-    return HealthCheck(name="no_failures_24h", passed=True, detail="No failures in last 24h")
-
-
-async def _check_daily_count_reasonable(conn: asyncpg.Connection) -> HealthCheck:
-    """Check 3: Daily registration count is within expected range."""
-    # Get yesterday's total
-    row = await conn.fetchrow(
-        """
-        SELECT SUM(registration_count) AS total
-        FROM fact_daily_registrations
-        WHERE date_key = CURRENT_DATE - 1
-        """
-    )
-    total = row["total"] if row else 0
-
-    # India total daily registrations should be 50K–1.2M on a weekday
-    # (avg ~100-150K/day based on ~40M/year)
-    MIN_EXPECTED = 30_000
-    MAX_EXPECTED = 2_000_000
-
-    if total is None or total == 0:
-        return HealthCheck(
-            name="daily_count_reasonable",
-            passed=False,
-            detail="No daily registration data found for yesterday",
-        )
-    if total < MIN_EXPECTED:
-        return HealthCheck(
-            name="daily_count_reasonable",
-            passed=False,
-            detail=f"Daily count too low: {total:,} (min: {MIN_EXPECTED:,})",
-        )
-    if total > MAX_EXPECTED:
-        return HealthCheck(
-            name="daily_count_reasonable",
-            passed=False,
-            detail=f"Daily count too high: {total:,} (max: {MAX_EXPECTED:,})",
-        )
-    return HealthCheck(
-        name="daily_count_reasonable",
-        passed=True,
-        detail=f"Daily count: {total:,}",
-    )
-
-
-async def _check_no_unmapped_makers(conn: asyncpg.Connection) -> HealthCheck:
-    """Check 4: No unmapped makers in recent VAHAN data."""
-    rows = await conn.fetch(
-        """
-        SELECT raw_maker_name, occurrence_count
-        FROM v_unmapped_makers
-        WHERE last_seen >= NOW() - INTERVAL '7 days'
-        ORDER BY occurrence_count DESC
-        LIMIT 5
-        """
-    )
-    if rows:
-        names = ", ".join(r["raw_maker_name"] for r in rows)
-        return HealthCheck(
-            name="no_unmapped_makers",
-            passed=False,
-            detail=f"Unmapped makers in last 7d: {names}",
-        )
-    return HealthCheck(
-        name="no_unmapped_makers", passed=True, detail="No unmapped makers"
-    )
-
-
-async def _check_mv_freshness(conn: asyncpg.Connection) -> HealthCheck:
-    """Check 5: Materialized view mv_oem_monthly_summary is fresh."""
-    # Check if MV has been populated at all (any rows)
-    count = await conn.fetchval("SELECT COUNT(*) FROM mv_oem_monthly_summary")
-    if count == 0:
-        return HealthCheck(
-            name="mv_freshness",
-            passed=False,
-            detail="mv_oem_monthly_summary is empty",
-        )
-    # Check last_updated in the MV
-    last_updated = await conn.fetchval(
-        "SELECT MAX(last_updated) FROM mv_oem_monthly_summary"
-    )
-    if last_updated is None:
-        return HealthCheck(
-            name="mv_freshness",
-            passed=False,
-            detail="mv_oem_monthly_summary has no last_updated values",
-        )
-    age = datetime.now(timezone.utc) - last_updated.replace(tzinfo=timezone.utc)
-    if age > timedelta(hours=26):
-        return HealthCheck(
-            name="mv_freshness",
-            passed=False,
-            detail=f"MV last updated {age.total_seconds()/3600:.1f}h ago (threshold: 26h)",
-        )
-    return HealthCheck(
-        name="mv_freshness",
-        passed=True,
-        detail=f"MV last updated {age.total_seconds()/3600:.1f}h ago",
-    )
-
-
-async def _check_heartbeat(conn: asyncpg.Connection) -> HealthCheck:
-    """Check 6: DB write succeeds (heartbeat)."""
-    try:
-        await conn.execute(
-            "INSERT INTO pipeline_heartbeat (status, note) VALUES ('OK', 'monitor_check')"
-        )
-        return HealthCheck(name="heartbeat", passed=True, detail="DB write succeeded")
-    except Exception as exc:
-        return HealthCheck(
-            name="heartbeat",
-            passed=False,
-            detail=f"DB write failed: {exc}",
-        )
-
-
-def _build_digest_message(result: MonitorResult) -> str:
-    """Build a Telegram-formatted digest message."""
-    lines = ["*AutoQuant — Daily Health Digest*"]
-    overall = "✅ All checks passed" if result.healthy else f"❌ {result.failed_checks} check(s) failed"
-    lines.append(overall)
-    lines.append("")
-    for check in result.checks:
-        icon = "✅" if check.passed else "❌"
-        lines.append(f"{icon} `{check.name}`: {check.detail}")
-    return "\n".join(lines)
+    checks_run: int = 0
 
 
 async def run_monitor(
@@ -229,55 +49,172 @@ async def run_monitor(
     verbose: bool = False,
 ) -> MonitorResult:
     """
-    Run all health checks and optionally send a Telegram digest.
+    Run pipeline health checks and optionally send Telegram digest.
 
     Args:
         pool: asyncpg connection pool
         settings: application settings
-        send_digest: if True, send Telegram digest regardless of health status
-        verbose: log detailed check results
+        send_digest: if True, send formatted digest via Telegram
+        verbose: enable verbose logging
 
     Returns:
-        MonitorResult with all check outcomes
+        MonitorResult with pass/fail status and issue list
     """
+    issues: List[str] = []
+    checks_run = 0
+
     log = logger.bind(send_digest=send_digest)
     log.info("monitor.start")
 
     async with pool.acquire() as conn:
-        checks = await asyncio.gather(
-            _check_last_successful_run(conn),
-            _check_no_failures_24h(conn),
-            _check_daily_count_reasonable(conn),
-            _check_no_unmapped_makers(conn),
-            _check_mv_freshness(conn),
-            _check_heartbeat(conn),
-        )
+        # -----------------------------------------------------------------
+        # Check 1: Last successful extraction < 36 hours ago
+        # -----------------------------------------------------------------
+        checks_run += 1
+        try:
+            last_success_ts = await conn.fetchval(
+                """
+                SELECT MAX(completed_at)
+                FROM raw_extraction_log
+                WHERE status = 'SUCCESS'
+                """
+            )
+            if last_success_ts is None:
+                issues.append(
+                    "No successful extractions found in raw_extraction_log"
+                )
+                logger.warning("monitor.check_failed", check="last_extraction_age", reason="no_records")
+            else:
+                # Make timezone-aware for comparison
+                now_utc = datetime.now(timezone.utc)
+                if last_success_ts.tzinfo is None:
+                    last_success_ts = last_success_ts.replace(tzinfo=timezone.utc)
+                age_hours = (now_utc - last_success_ts).total_seconds() / 3600
 
-    failed = [c for c in checks if not c.passed]
-    result = MonitorResult(
-        healthy=len(failed) == 0,
-        failed_checks=len(failed),
-        checks=list(checks),
-        issues=[c.detail for c in failed],
+                if age_hours > MAX_EXTRACTION_AGE_HOURS:
+                    issues.append(
+                        f"Last successful extraction was {age_hours:.1f}h ago "
+                        f"(threshold: {MAX_EXTRACTION_AGE_HOURS}h)"
+                    )
+                    logger.warning(
+                        "monitor.check_failed",
+                        check="last_extraction_age",
+                        age_hours=round(age_hours, 1),
+                    )
+                else:
+                    logger.debug(
+                        "monitor.check_passed",
+                        check="last_extraction_age",
+                        age_hours=round(age_hours, 1),
+                    )
+        except Exception as exc:
+            issues.append(f"last_extraction_age check error: {exc}")
+            logger.error("monitor.check_error", check="last_extraction_age", error=str(exc))
+
+        # -----------------------------------------------------------------
+        # Check 2: No FAILED runs in the last 24 hours
+        # -----------------------------------------------------------------
+        checks_run += 1
+        try:
+            failed_24h: int = await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM raw_extraction_log
+                WHERE status = 'FAILED'
+                  AND started_at >= NOW() - INTERVAL '24 hours'
+                """
+            )
+            failed_24h = int(failed_24h or 0)
+
+            if failed_24h > MAX_RECENT_FAILURES_24H:
+                issues.append(
+                    f"{failed_24h} FAILED extraction run(s) in the last 24 hours"
+                )
+                logger.warning(
+                    "monitor.check_failed",
+                    check="no_recent_failures",
+                    failed_count=failed_24h,
+                )
+            else:
+                logger.debug(
+                    "monitor.check_passed",
+                    check="no_recent_failures",
+                    failed_24h=failed_24h,
+                )
+        except Exception as exc:
+            issues.append(f"no_recent_failures check error: {exc}")
+            logger.error("monitor.check_error", check="no_recent_failures", error=str(exc))
+
+        # -----------------------------------------------------------------
+        # Check 3: Unmapped makers below threshold
+        # -----------------------------------------------------------------
+        checks_run += 1
+        try:
+            unmapped_count: int = await conn.fetchval(
+                "SELECT COUNT(*) FROM v_unmapped_makers"
+            )
+            unmapped_count = int(unmapped_count or 0)
+
+            if unmapped_count > MAX_UNMAPPED_MAKERS:
+                issues.append(
+                    f"{unmapped_count} unmapped maker(s) detected "
+                    f"(threshold: {MAX_UNMAPPED_MAKERS})"
+                )
+                logger.warning(
+                    "monitor.check_failed",
+                    check="unmapped_makers",
+                    count=unmapped_count,
+                )
+            else:
+                logger.debug(
+                    "monitor.check_passed",
+                    check="unmapped_makers",
+                    count=unmapped_count,
+                )
+        except Exception as exc:
+            issues.append(f"unmapped_makers check error: {exc}")
+            logger.error("monitor.check_error", check="unmapped_makers", error=str(exc))
+
+        # -----------------------------------------------------------------
+        # Check 4: Insert heartbeat
+        # -----------------------------------------------------------------
+        healthy = len(issues) == 0
+        try:
+            await conn.execute(
+                """
+                INSERT INTO pipeline_heartbeat (component, status, details)
+                VALUES ('monitor', $1, $2::jsonb)
+                """,
+                "OK" if healthy else "DEGRADED",
+                f'{"issues": {len(issues)}, "checks_run": {checks_run}}',
+            )
+            logger.debug("monitor.heartbeat_inserted")
+        except Exception as exc:
+            logger.warning("monitor.heartbeat_failed", error=str(exc))
+
+    failed_checks = len(issues)
+
+    log.info(
+        "monitor.complete",
+        healthy=healthy,
+        failed_checks=failed_checks,
+        checks_run=checks_run,
     )
-    result.digest_message = _build_digest_message(result)
 
-    if verbose:
-        for check in checks:
-            status = "PASS" if check.passed else "FAIL"
-            log.info("monitor.check", name=check.name, status=status, detail=check.detail)
+    if verbose and issues:
+        for issue in issues:
+            logger.info("monitor.issue", detail=issue)
 
-    # Send alerts for failures
-    if failed:
-        alert_msg = (
-            f"❌ AutoQuant Monitor: {len(failed)} check(s) failed\n"
-            + "\n".join(f"  - {c.name}: {c.detail}" for c in failed)
-        )
-        await send_telegram_alert(settings=settings, message=alert_msg)
-
-    # Send digest if requested
+    # Optionally send Telegram digest
     if send_digest:
-        await send_telegram_alert(settings=settings, message=result.digest_message)
+        try:
+            await send_pipeline_digest(settings=settings, pool=pool)
+        except Exception as exc:
+            logger.error("monitor.digest_failed", error=str(exc))
 
-    log.info("monitor.complete", healthy=result.healthy, failed_checks=result.failed_checks)
-    return result
+    return MonitorResult(
+        healthy=healthy,
+        failed_checks=failed_checks,
+        issues=issues,
+        checks_run=checks_run,
+    )

@@ -1,140 +1,75 @@
 """
-AutoQuant ETL — Database Connection Pool
-Manages asyncpg connection pools.
+AutoQuant ETL — Database Utilities
+====================================
+Async connection pool management using asyncpg.
 """
 
 from __future__ import annotations
-
-import asyncio
-import logging
-from typing import Optional
 
 import asyncpg
 import structlog
 
 logger = structlog.get_logger(__name__)
 
-_pool: Optional[asyncpg.Pool] = None
-_pool_lock = asyncio.Lock()
-
-# Connection pool settings
-MIN_POOL_SIZE = 2
-MAX_POOL_SIZE = 10
-COMMAND_TIMEOUT = 60  # seconds
-
 
 async def get_pool(database_url: str) -> asyncpg.Pool:
     """
-    Get or create a shared asyncpg connection pool.
-
-    Uses a module-level singleton pool. Thread-safe via asyncio.Lock.
+    Create and return an asyncpg connection pool.
 
     Args:
         database_url: PostgreSQL connection string
+                      (postgresql://user:pw@host:port/db)
 
     Returns:
-        asyncpg.Pool instance
+        asyncpg.Pool ready for use
 
     Raises:
-        asyncpg.PostgresError: if connection fails
+        asyncpg.PostgresError: if connection cannot be established
     """
-    global _pool
+    # asyncpg requires 'postgresql://' scheme; normalise postgres:// aliases
+    url = database_url
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
 
-    async with _pool_lock:
-        if _pool is None:
-            logger.info("database.pool_creating", min_size=MIN_POOL_SIZE, max_size=MAX_POOL_SIZE)
-            _pool = await asyncpg.create_pool(
-                dsn=database_url,
-                min_size=MIN_POOL_SIZE,
-                max_size=MAX_POOL_SIZE,
-                command_timeout=COMMAND_TIMEOUT,
-                # SSL required for Supabase/Neon
-                ssl="require",
-                statement_cache_size=0,  # Disable for pgBouncer compatibility
-            )
-            logger.info("database.pool_created")
-
-    return _pool
+    pool = await asyncpg.create_pool(
+        dsn=url,
+        min_size=2,
+        max_size=10,
+        command_timeout=60,
+        # Automatically apply codec for jsonb
+        init=_init_connection,
+    )
+    logger.info("database.pool_created", min_size=2, max_size=10)
+    return pool
 
 
-async def close_pool(pool: Optional[asyncpg.Pool] = None) -> None:
+async def close_pool(pool: asyncpg.Pool) -> None:
     """
-    Close the connection pool.
+    Gracefully close the connection pool.
 
     Args:
-        pool: pool to close (if None, closes the module-level singleton)
+        pool: asyncpg.Pool to close
     """
-    global _pool
-
-    target = pool or _pool
-    if target is None:
-        return
-
-    await target.close()
-    if target is _pool:
-        _pool = None
+    await pool.close()
     logger.info("database.pool_closed")
 
 
-async def check_db_health(pool: asyncpg.Pool) -> bool:
-    """
-    Lightweight DB health check.
-
-    Args:
-        pool: asyncpg connection pool
-
-    Returns:
-        True if DB is healthy, False otherwise
-    """
-    try:
-        async with pool.acquire() as conn:
-            await conn.fetchval("SELECT 1")
-        return True
-    except Exception as exc:
-        logger.error("database.health_check_failed", error=str(exc))
-        return False
+async def _init_connection(conn: asyncpg.Connection) -> None:
+    """Per-connection initialisation: register JSONB codec."""
+    await conn.set_type_codec(
+        "jsonb",
+        encoder=_jsonb_encode,
+        decoder=_jsonb_decode,
+        schema="pg_catalog",
+        format="text",
+    )
 
 
-async def execute_with_retry(
-    pool: asyncpg.Pool,
-    query: str,
-    *args,
-    max_retries: int = 3,
-    retry_delay: float = 1.0,
-):
-    """
-    Execute a query with retry logic for transient failures.
+def _jsonb_encode(value: object) -> str:
+    import json
+    return json.dumps(value)
 
-    Args:
-        pool: asyncpg connection pool
-        query: SQL query string
-        *args: Query parameters
-        max_retries: Maximum number of retry attempts
-        retry_delay: Base delay between retries (exponential backoff)
 
-    Returns:
-        Query result
-    """
-    for attempt in range(1, max_retries + 1):
-        try:
-            async with pool.acquire() as conn:
-                return await conn.execute(query, *args)
-        except asyncpg.TooManyConnectionsError as exc:
-            if attempt == max_retries:
-                raise
-            logger.warning(
-                "database.too_many_connections",
-                attempt=attempt,
-                delay=retry_delay * attempt,
-            )
-            await asyncio.sleep(retry_delay * attempt)
-        except asyncpg.PostgresConnectionError as exc:
-            if attempt == max_retries:
-                raise
-            logger.warning(
-                "database.connection_error",
-                attempt=attempt,
-                error=str(exc),
-                delay=retry_delay * attempt,
-            )
-            await asyncio.sleep(retry_delay * attempt)
+def _jsonb_decode(value: str) -> object:
+    import json
+    return json.loads(value)
