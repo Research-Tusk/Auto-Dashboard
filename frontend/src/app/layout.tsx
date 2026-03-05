@@ -1,5 +1,13 @@
 import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
 import './globals.css';
+import { Header } from '@/components/layout/Header';
+
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-inter',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: 'AutoQuant — India Auto Registrations Dashboard',
@@ -14,26 +22,18 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-slate-50">
-        {/* Top nav */}
-        <nav className="bg-white border-b border-slate-200 px-6 py-3 flex items-center gap-6">
-          <span className="font-bold text-brand-600 text-lg tracking-tight">
-            AutoQuant
+    <html lang="en" className={inter.variable}>
+      <body className="min-h-screen bg-slate-50 antialiased">
+        <Header />
+        {/* Revenue disclaimer — always visible */}
+        <div className="mx-4 sm:mx-6 mt-3 disclaimer-banner flex items-start gap-2">
+          <span className="shrink-0 mt-0.5">⚠️</span>
+          <span>
+            <strong>Research use only.</strong> Revenue figures are demand-based proxies
+            (registrations × ASP assumption). NOT accounting revenue. Not for investment decisions.
           </span>
-          <a href="/dashboard" className="text-sm text-slate-600 hover:text-brand-600">Dashboard</a>
-          <a href="/revenue"  className="text-sm text-slate-600 hover:text-brand-600">Revenue</a>
-          <a href="/scorecard" className="text-sm text-slate-600 hover:text-brand-600">Scorecard</a>
-          <a href="/history"  className="text-sm text-slate-600 hover:text-brand-600">History</a>
-        </nav>
-
-        {/* Disclaimer */}
-        <div className="mx-6 mt-3 disclaimer-banner">
-          ⚠️ Revenue figures are demand-based proxies (registrations × ASP assumption).
-          NOT accounting revenue. Do not use for investment decisions.
         </div>
-
-        <main className="px-6 py-6">{children}</main>
+        <main className="px-4 sm:px-6 py-6">{children}</main>
       </body>
     </html>
   );
