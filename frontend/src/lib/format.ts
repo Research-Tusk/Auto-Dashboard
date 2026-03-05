@@ -1,81 +1,93 @@
 /**
- * AutoQuant — Frontend Formatters
- * Utility functions for formatting numbers, dates, and currency values.
+ * AutoQuant — Formatting Utilities
+ * Consistent number and date formatting for finance data.
  */
 
-/**
- * Format a number as Indian currency (INR Crore with commas).
- * e.g. 125000 → '₹1,25,000 Cr'
- */
-export function formatCrore(value: number | null | undefined): string {
+// ---------------------------------------------------------------------------
+// Currency helpers
+// ---------------------------------------------------------------------------
+
+/** Format a value in Indian Crores. Returns '—' for nullish. */
+export function formatCrores(value: number | null | undefined): string {
   if (value == null) return '—';
-  return `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 0 })} Cr`;
+  return `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 1 })} Cr`;
 }
 
-/**
- * Format units with K/M suffix.
- * e.g. 125000 → '1.25L' (India convention) or '125K'
- */
-export function formatUnits(value: number | null | undefined, style: 'K' | 'L' | 'M' = 'K'): string {
+/** Format a value in Indian Lakhs (for ASP). Returns '—' for nullish. */
+export function formatLakhs(value: number | null | undefined): string {
   if (value == null) return '—';
-  if (style === 'L') return `${(value / 100_000).toFixed(2)}L`;
-  if (style === 'M') return `${(value / 1_000_000).toFixed(2)}M`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
-  return value.toString();
+  // ASP stored in INR; convert to Lakhs
+  const lakhs = value / 1_00_000;
+  return `${lakhs.toLocaleString('en-IN', { minimumFractionDigits: 1, maximumFractionDigits: 2 })}L`;
 }
 
-/**
- * Format a percentage.
- * e.g. 15.23 → '15.2%'
- */
-export function formatPct(value: number | null | undefined, decimals = 1): string {
+// ---------------------------------------------------------------------------
+// Unit helpers
+// ---------------------------------------------------------------------------
+
+/** Format a vehicle unit count. Returns '—' for nullish. */
+export function formatUnits(value: number | null | undefined): string {
   if (value == null) return '—';
-  return `${value.toFixed(decimals)}%`;
+  return value.toLocaleString('en-IN');
 }
 
-/**
- * Format a date string as 'MMM YYYY'.
- * e.g. '2025-12-01' → 'Dec 2025'
- */
-export function formatMonth(dateStr: string | null | undefined): string {
-  if (!dateStr) return '—';
-  const d = new Date(dateStr);
-  return d.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+/** Axis tick formatter — compact (e.g. 1.2L, 45K). */
+export function formatAxisUnits(value: number): string {
+  if (value >= 1_00_000) return `${(value / 1_00_000).toFixed(1)}L`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(0)}K`;
+  return String(value);
 }
 
+// ---------------------------------------------------------------------------
+// Percentage helpers
+// ---------------------------------------------------------------------------
+
 /**
- * Format ASP in INR Lakhs.
- * e.g. 12.5 → '₹12.5L'
+ * Format a decimal ratio as a percentage string (e.g. 0.234 → "23.4%").
+ * Returns '—' for nullish.
  */
-export function formatASP(value: number | null | undefined): string {
+export function formatPct(value: number | null | undefined): string {
   if (value == null) return '—';
-  return `₹${value.toFixed(2)}L`;
+  return `${(value * 100).toFixed(1)}%`;
 }
 
 /**
- * Compute YoY change percentage.
+ * Format an already-scaled percentage (e.g. 23.4 → "23.4%").
+ * Returns '—' for nullish.
  */
-export function computeYoY(current: number, prior: number): number | null {
-  if (!prior || prior === 0) return null;
-  return ((current - prior) / prior) * 100;
-}
-
-/**
- * Format YoY change as string with sign.
- * e.g. 5.2 → '+5.2%', -3.1 → '-3.1%'
- */
-export function formatYoY(value: number | null | undefined): string {
+export function formatPctPlain(value: number | null | undefined): string {
   if (value == null) return '—';
-  const sign = value >= 0 ? '+' : '';
-  return `${sign}${value.toFixed(1)}%`;
+  return `${value.toFixed(1)}%`;
 }
 
 /**
- * Truncate OEM name for display.
- * e.g. 'Maruti Suzuki India Ltd' → 'Maruti Suzuki'
+ * Format a percentage change with sign (e.g. +2.3pp or -1.1pp).
+ * Input is decimal (0.023 = 2.3pp).
  */
-export function truncateOEMName(name: string, maxLen = 20): string {
-  if (name.length <= maxLen) return name;
-  return name.slice(0, maxLen - 1) + '…';
+export function formatPpChange(value: number | null | undefined): string {
+  if (value == null) return '—';
+  const pp = value * 100;
+  return `${pp >= 0 ? '+' : ''}${pp.toFixed(1)}pp`;
+}
+
+// ---------------------------------------------------------------------------
+// Date / quarter helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a fiscal quarter string like "FY2425Q3" → human label "FY25 Q3".
+ */
+export function formatFYQuarter(q: string): string {
+  // Expected: FY2425Q3 or FY24Q3 (various conventions)
+  const m = q.match(/FY(\d{2,4})(Q\d)/i);
+  if (!m) return q;
+  const fy = m[1].length === 4 ? m[1].slice(2) : m[1]; // last 2 digits
+  return `FY${fy} ${m[2].toUpperCase()}`;
+}
+
+/**
+ * Sort comparator for fiscal quarter strings (ascending).
+ */
+export function sortFYQuarter(a: string, b: string): number {
+  return a.localeCompare(b);
 }

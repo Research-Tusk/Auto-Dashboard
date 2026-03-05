@@ -1,8 +1,8 @@
 import { createBrowserClient } from '@supabase/ssr';
 
 /**
- * Create a Supabase client for use in browser (client components).
- * Uses NEXT_PUBLIC_* env vars which are safe to expose to the browser.
+ * Creates a Supabase client for use in Client Components.
+ * Uses the anon key + RLS for security.
  */
 export function createClient() {
   return createBrowserClient(
@@ -10,9 +10,3 @@ export function createClient() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 }
-
-/**
- * Type helper for Supabase tables used in AutoQuant.
- * Extend as more tables are added to the query layer.
- */
-export type SupabaseClient = ReturnType<typeof createClient>;

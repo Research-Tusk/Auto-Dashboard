@@ -1,42 +1,59 @@
+import { clsx } from 'clsx';
+
 interface SkeletonProps {
   className?: string;
-  lines?: number;        // for text skeleton
-  type?: 'text' | 'card' | 'chart' | 'table';
 }
 
-export function Skeleton({ className = '', type = 'text', lines = 3 }: SkeletonProps) {
-  if (type === 'chart') {
-    return <div className={`skeleton h-64 w-full rounded-xl ${className}`} />;
-  }
+function Skeleton({ className }: SkeletonProps) {
+  return (
+    <div className={clsx('animate-pulse rounded bg-slate-100', className)} />
+  );
+}
 
-  if (type === 'card') {
-    return (
-      <div className={`kpi-card ${className}`}>
-        <div className="skeleton h-8 w-24 mb-2" />
-        <div className="skeleton h-4 w-16" />
-      </div>
-    );
-  }
+interface SkeletonKPIRowProps {
+  count?: number;
+}
 
-  if (type === 'table') {
-    return (
-      <div className={`space-y-2 ${className}`}>
-        <div className="skeleton h-10 w-full rounded" />
-        {[...Array(lines)].map((_, i) => (
-          <div key={i} className="skeleton h-8 w-full rounded" />
+export function SkeletonKPIRow({ count = 4 }: SkeletonKPIRowProps) {
+  return (
+    <div className={`grid grid-cols-2 sm:grid-cols-${count} gap-4`}>
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} className="section-card space-y-2">
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="h-7 w-16" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+interface SkeletonChartProps {
+  height?: string;
+}
+
+export function SkeletonChart({ height = 'h-48' }: SkeletonChartProps) {
+  return <Skeleton className={`w-full ${height}`} />;
+}
+
+interface SkeletonTableProps {
+  rows?: number;
+  cols?: number;
+}
+
+export function SkeletonTable({ rows = 5, cols = 4 }: SkeletonTableProps) {
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-4">
+        {Array.from({ length: cols }).map((_, i) => (
+          <Skeleton key={i} className="h-3 flex-1" />
         ))}
       </div>
-    );
-  }
-
-  // Default: text skeleton
-  return (
-    <div className={`space-y-2 ${className}`}>
-      {[...Array(lines)].map((_, i) => (
-        <div
-          key={i}
-          className={`skeleton h-4 rounded ${i === lines - 1 ? 'w-3/4' : 'w-full'}`}
-        />
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="flex gap-4">
+          {Array.from({ length: cols }).map((_, j) => (
+            <Skeleton key={j} className="h-4 flex-1" />
+          ))}
+        </div>
       ))}
     </div>
   );

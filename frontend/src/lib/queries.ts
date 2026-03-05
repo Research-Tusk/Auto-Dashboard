@@ -1,184 +1,172 @@
 /**
  * AutoQuant — Supabase Query Functions
  * Typed query helpers for each dashboard section.
- *
- * DISCLAIMER: Revenue figures are demand-based proxies.
- * NOT accounting revenue. Do NOT use for investment decisions.
+ * Uses supabase-server (RSC) or supabase-client (CSR) depending on context.
  */
 
-import { createClient } from './supabase';
+import { createServerSupabase } from './supabase-server';
+import type {
+  OEMRecord,
+  TIVRecord,
+  OEMScorecard,
+  MSHistoryRecord,
+  RevenueRow,
+  PowertrainRow,
+} from '@/types';
 
 // ---------------------------------------------------------------------------
-// Types (mirrored from src/types/index.ts for convenience)
-// ---------------------------------------------------------------------------
-export type { TIVRow, OEMShareRow, RevenueRow, OEMSummaryRow } from '../types';
-
-import type { TIVRow, OEMShareRow, RevenueRow, OEMSummaryRow, OEMInfo, FreshnesRow } from '../types';
-
-// ---------------------------------------------------------------------------
-// Dashboard queries
+// Dimension tables
 // ---------------------------------------------------------------------------
 
-/**
- * Get monthly TIV for all segments (last N months).
- */
-export async function getTIVSummary(months = 13): Promise<TIVRow[]> {
-  const supabase = createClient();
+export async function fetchOEMs(): Promise<OEMRecord[]> {
+  const supabase = await createServerSupabase();
   const { data, error } = await supabase
-    .from('v_monthly_tiv_summary')
-    .select('month_key,fy_quarter,segment_code,tiv_units,ev_units,ev_penetration_pct')
-    .order('month_key', { ascending: false })
-    .limit(months * 4); // 4 segments
-
-  if (error) throw new Error(error.message);
-  return (data ?? []) as TIVRow[];
+    .from('dim_oem')
+    .select('oem_id, oem_name, nse_ticker, primary_segments, is_in_scope, description')
+    .eq('is_in_scope', true)
+    .order('oem_name');
+  if (error) throw new Error(`fetchOEMs: ${error.message}`);
+  return (data ?? []) as OEMRecord[];
 }
 
-/**
- * Get OEM market share for a segment (last N months).
- */
-export async function getOEMMarketShare(
-  segment: string,
-  months = 6
-): Promise<OEMShareRow[]> {
-  const supabase = createClient();
+export async function fetchOEMByTicker(ticker: string): Promise<OEMRecord | null> {
+  const supabase = await createServerSupabase();
   const { data, error } = await supabase
-    .from('v_oem_market_share')
-    .select('month_key,oem_name,nse_ticker,segment_code,oem_units,segment_tiv,market_share_pct')
-    .eq('segment_code', segment.toUpperCase())
-    .order('month_key', { ascending: false })
-    .limit(months * 20); // ~20 OEMs per segment
-
-  if (error) throw new Error(error.message);
-  return (data ?? []) as OEMShareRow[];
-}
-
-// ---------------------------------------------------------------------------
-// OEM Deep Dive queries
-// ---------------------------------------------------------------------------
-
-/**
- * Get monthly OEM summary from materialized view.
- */
-export async function getOEMMonthly(
-  ticker: string,
-  months = 13
-): Promise<OEMSummaryRow[]> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from('mv_oem_monthly_summary')
-    .select(
-      'month_key,fy_year,fy_quarter,oem_name,segment_code,fuel_bucket,total_units,units_prior_year,last_updated'
-    )
+    .from('dim_oem')
+    .select('oem_id, oem_name, nse_ticker, primary_segments, is_in_scope, description')
     .eq('nse_ticker', ticker.toUpperCase())
-    .order('month_key', { ascending: false })
-    .limit(months * 12);
-
-  if (error) throw new Error(error.message);
-  return (data ?? []) as OEMSummaryRow[];
+    .single();
+  if (error) return null;
+  return data as OEMRecord;
 }
 
-/**
- * Get OEM revenue proxy history.
- */
-export async function getOEMRevenue(
+// ---------------------------------------------------------------------------
+// TIV (Total Industry Volume)
+// ---------------------------------------------------------------------------
+
+export async function fetchTIV(segmentId?: number): Promise<TIVRecord[]> {
+  const supabase = await createServerSupabase();
+  let query = supabase
+    .from('fact_tiv')
+    .select('fy_quarter, segment_id, tiv_retail, tiv_wholesale, tiv_yoy_pct')
+    .order('fy_quarter', { ascending: true })
+    .limit(80);
+  if (segmentId != null) query = query.eq('segment_id', segmentId);
+  const { data, error } = await query;
+  if (error) throw new Error(`fetchTIV: ${error.message}`);
+  return (data ?? []) as TIVRecord[];
+}
+
+// ---------------------------------------------------------------------------
+// Scorecard
+// ---------------------------------------------------------------------------
+
+export async function fetchScorecard(
+  segmentId: number,
+  quarter?: string
+): Promise<OEMScorecard[]> {
+  const supabase = await createServerSupabase();
+  let query = supabase
+    .from('oem_scorecard')
+    .select('*')
+    .eq('segment_id', segmentId)
+    .order('ms_pct', { ascending: false });
+  if (quarter) query = query.eq('fy_quarter', quarter);
+  const { data, error } = await query;
+  if (error) throw new Error(`fetchScorecard: ${error.message}`);
+  return (data ?? []) as OEMScorecard[];
+}
+
+// ---------------------------------------------------------------------------
+// Market Share History
+// ---------------------------------------------------------------------------
+
+export async function fetchMSHistory(
+  segmentId: number,
+  oemId?: number
+): Promise<MSHistoryRecord[]> {
+  const supabase = await createServerSupabase();
+  let query = supabase
+    .from('oem_ms_history')
+    .select('fy_quarter, oem_id, segment_id, units_retail, ms_pct, ms_pct_qoq, ms_pct_yoy')
+    .eq('segment_id', segmentId)
+    .order('fy_quarter', { ascending: true })
+    .limit(200);
+  if (oemId != null) query = query.eq('oem_id', oemId);
+  const { data, error } = await query;
+  if (error) throw new Error(`fetchMSHistory: ${error.message}`);
+  return (data ?? []) as MSHistoryRecord[];
+}
+
+// ---------------------------------------------------------------------------
+// Revenue estimates
+// ---------------------------------------------------------------------------
+
+export async function fetchRevenue(
+  segmentId?: number,
   oemId?: number,
-  quarters = 8
+  limit = 200
 ): Promise<RevenueRow[]> {
-  const supabase = createClient();
+  const supabase = await createServerSupabase();
   let query = supabase
     .from('est_quarterly_revenue')
     .select(
-      'fy_quarter,oem_id,segment_id,units_retail,units_wholesale,asp_used,revenue_retail_cr,revenue_wholesale_cr,data_completeness,generated_at'
+      'fy_quarter, oem_id, segment_id, units_retail, units_wholesale, asp_used, ' +
+      'revenue_retail_cr, revenue_wholesale_cr, data_completeness, generated_at'
     )
     .order('fy_quarter', { ascending: false })
-    .limit(quarters * 10);
-
-  if (oemId) {
-    query = query.eq('oem_id', oemId);
-  }
-
+    .limit(limit);
+  if (segmentId != null) query = query.eq('segment_id', segmentId);
+  if (oemId != null) query = query.eq('oem_id', oemId);
   const { data, error } = await query;
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(`fetchRevenue: ${error.message}`);
   return (data ?? []) as RevenueRow[];
 }
 
 // ---------------------------------------------------------------------------
-// History queries
+// Powertrain mix
 // ---------------------------------------------------------------------------
 
-/**
- * Get historical TIV for a segment and year range.
- */
-export async function getHistoricalTIV(
-  segment: string,
-  fromYear: number,
-  toYear: number
-): Promise<TIVRow[]> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from('v_monthly_tiv_summary')
-    .select('month_key,fy_quarter,tiv_units,ev_units,ev_penetration_pct')
-    .eq('segment_code', segment.toUpperCase())
-    .gte('month_key', `${fromYear}-01-01`)
-    .lte('month_key', `${toYear}-12-31`)
-    .order('month_key', { ascending: true });
-
-  if (error) throw new Error(error.message);
-  return (data ?? []) as TIVRow[];
-}
-
-/**
- * Get historical OEM share for a segment and year range.
- */
-export async function getHistoricalOEMShare(
-  segment: string,
-  fromYear: number,
-  toYear: number,
-  limit = 500
-): Promise<OEMShareRow[]> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from('v_oem_market_share')
-    .select('month_key,oem_name,nse_ticker,oem_units,market_share_pct')
-    .eq('segment_code', segment.toUpperCase())
-    .gte('month_key', `${fromYear}-01-01`)
-    .lte('month_key', `${toYear}-12-31`)
-    .order('month_key', { ascending: true })
-    .limit(limit);
-
-  if (error) throw new Error(error.message);
-  return (data ?? []) as OEMShareRow[];
+export async function fetchPowertrain(
+  segmentId?: number,
+  oemId?: number
+): Promise<PowertrainRow[]> {
+  const supabase = await createServerSupabase();
+  let query = supabase
+    .from('fact_powertrain')
+    .select('fy_quarter, oem_id, segment_id, powertrain, units_retail, share_pct')
+    .order('fy_quarter', { ascending: true })
+    .limit(300);
+  if (segmentId != null) query = query.eq('segment_id', segmentId);
+  if (oemId != null) query = query.eq('oem_id', oemId);
+  const { data, error } = await query;
+  if (error) throw new Error(`fetchPowertrain: ${error.message}`);
+  return (data ?? []) as PowertrainRow[];
 }
 
 // ---------------------------------------------------------------------------
-// Admin / debug queries
+// Dashboard summary (used by API route)
 // ---------------------------------------------------------------------------
 
-/**
- * Get all in-scope OEMs.
- */
-export async function getOEMs(): Promise<OEMInfo[]> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from('dim_oem')
-    .select('oem_id,oem_name,nse_ticker,is_listed,is_in_scope,primary_segments')
-    .eq('is_in_scope', true)
-    .order('oem_name');
+export async function fetchDashboardSummary(segmentId: number) {
+  const [tiv, scorecard] = await Promise.all([
+    fetchTIV(segmentId),
+    fetchScorecard(segmentId),
+  ]);
 
-  if (error) throw new Error(error.message);
-  return (data ?? []) as OEMInfo[];
-}
+  const latestTIVQuarter = tiv.length > 0 ? tiv[tiv.length - 1].fy_quarter : null;
+  const latestTIV = tiv.length > 0 ? tiv[tiv.length - 1] : null;
 
-/**
- * Get data freshness summary.
- */
-export async function getDataFreshness(): Promise<FreshnesRow[]> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from('v_data_freshness')
-    .select('source,last_attempted,last_success,last_records_loaded,failures_24h');
+  const latestScorecardQuarter = scorecard.length > 0
+    ? [...new Set(scorecard.map(s => s.fy_quarter))].sort().reverse()[0]
+    : null;
+  const latestScorecard = scorecard.filter(s => s.fy_quarter === latestScorecardQuarter);
 
-  if (error) throw new Error(error.message);
-  return (data ?? []) as FreshnesRow[];
+  return {
+    latestTIVQuarter,
+    latestTIV,
+    latestScorecardQuarter,
+    topOEMs: latestScorecard.slice(0, 5),
+    tivHistory: tiv,
+  };
 }
